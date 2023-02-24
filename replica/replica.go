@@ -47,6 +47,7 @@ type Config struct {
 }
 
 // Replica is a participant in the consensus protocol.
+// 在共识里Replica既要做client也要做server
 type Replica struct {
 	clientSrv *clientSrv
 	cfg       *backend.Config
@@ -67,7 +68,7 @@ func New(conf Config, builder modules.Builder) (replica *Replica) {
 			grpc.Creds(credentials.NewServerTLSFromCert(conf.Certificate)),
 		))
 	}
-
+	// 初始化clientSrv
 	clientSrv := newClientServer(conf, clientSrvOpts)
 
 	srv := &Replica{
@@ -87,7 +88,7 @@ func New(conf Config, builder modules.Builder) (replica *Replica) {
 			})),
 		))
 	}
-
+	// 初始化backend server
 	srv.hsSrv = backend.NewServer(replicaSrvOpts...)
 
 	var creds credentials.TransportCredentials
@@ -109,7 +110,7 @@ func New(conf Config, builder modules.Builder) (replica *Replica) {
 		srv.clientSrv.cmdCache,
 		srv.clientSrv.cmdCache,
 	)
-	srv.hs = builder.Build()
+	srv.hs = builder.Build() // Build()方法初始化所有加入列表的模块
 
 	return srv
 }

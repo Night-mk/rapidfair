@@ -81,6 +81,14 @@ func init() {
 	runCmd.Flags().Duration("rate-step-interval", time.Hour, "how often the client rate limit should be increased")
 	runCmd.Flags().StringSlice("byzantine", nil, "byzantine strategies to use, as a comma separated list of 'name:count'")
 
+	// RapidFair: baseline 增加collect阶段的配置设置
+	// serialcollect表示使用Themis协议
+	runCmd.Flags().String("fairorder-collect", "serialcollect", "enable fair ordering collect phase")
+	// 增加是否执行RapidFair的参数
+	runCmd.Flags().Bool("usefairorder", false, "enable order-fairness protocol (Themis or RapidFair)")
+	// 增加Themis的gamma参数
+	runCmd.Flags().Float32("themis-gamma", 1.0, "gamma parameter in Themis")
+
 	err := viper.BindPFlags(runCmd.Flags())
 	if err != nil {
 		panic(err)
@@ -116,6 +124,10 @@ func runController() {
 			MaxTimeout:        durationpb.New(viper.GetDuration("max-timeout")),
 			SharedSeed:        viper.GetInt64("shared-seed"),
 			Modules:           viper.GetStringSlice("modules"),
+			// RapidFair: baseline 增加collect module（可选项目）
+			FairOrderCollect: viper.GetString("fairorder-collect"),
+			UseFairOrder:     viper.GetBool("usefairorder"),
+			ThemisGamma:      float32(viper.GetFloat64("themis-gamma")),
 		},
 		ClientOpts: &orchestrationpb.ClientOpts{
 			UseTLS:           true,

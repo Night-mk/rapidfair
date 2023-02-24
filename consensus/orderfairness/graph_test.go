@@ -2,7 +2,9 @@ package orderfairness
 
 import (
 	"fmt"
+	"math"
 	"testing"
+	"time"
 )
 
 func InitGraph() *Graph {
@@ -52,4 +54,71 @@ func TestGraph(t *testing.T) {
 			fmt.Print(u)
 		}
 	}
+
+	var vt = []string{"tx1", "tx2"}
+	u := vt[0]
+	vt = vt[1:]
+	fmt.Println("\n value of u: ", u)
+	fmt.Println("arr: ", vt)
+}
+
+var U int = 1
+var R int = 1
+var TxNum int = 100   // 50, 100, 200, 400
+var NodeNum int = 5   // 5, 6, 9, 21, 41
+var Gamma float32 = 1 // 1, 0.9, 0.75, 0.6, 0.55
+// var Fault int = 3
+var Rounds int = 10
+
+// 测试公平排序交易序列
+func TestOrderFairness(t *testing.T) {
+	sumExTime := uint64(0)
+	allExTime := make([]uint64, 0)
+	fmt.Println("Node num: ", NodeNum)
+	fmt.Println("gamma: ", Gamma)
+	// 测试k次取平均值（5次？）
+	for k := 0; k < Rounds; k++ {
+		fmt.Println("Round ", k)
+		// 1. 生成txList
+		// 生成txList的节点数量为quorum
+		quorumNodeNum := NodeNum - int(math.Floor((float64(nodeNum-1)*float64(2*Gamma-1))/float64(4)))
+		// fmt.Println(quorumNodeNum)
+		st := NewSimTxData(TxNum, quorumNodeNum)
+		txList, sendTxSeq := st.GenSimTxData(U, R)
+		// fmt.Println("txList: ")
+		// fmt.Println(txList)
+		fmt.Println("sendTxSeq len: ", len(sendTxSeq))
+		// fmt.Println(sendTxSeq)
+
+		// 2. 测试公平排序
+		// 计算程序执行时间
+		start := time.Now() // 获取当前时间
+		finalTxSeq := FairOrder_Themis(txList, NodeNum, Gamma)
+		elapsed := time.Since(start)
+		fmt.Println("Execution time:", elapsed)
+		sumExTime += uint64(elapsed)
+		allExTime = append(allExTime, uint64(elapsed))
+		// fmt.Println(float64(uint64(elapsed)) / float64(1000000))
+		// fmt.Println("finalTxSeq: ", finalTxSeq)
+
+		sRate := Metric_SuccessOrderRate(finalTxSeq, sendTxSeq)
+		fmt.Printf("success order rate: %.4f \n", sRate)
+	}
+
+	// 计算平均值
+	avgExTime := float64(sumExTime) / float64(1000000*Rounds)
+	// 计算标准差 = sqrt(sum((x-avg)^2)/num)
+	vari := float64(0)
+	for _, x := range allExTime {
+		// fmt.Println("vari: ", float64(x)/float64(1000000)-avgExTime)
+		vari += math.Pow(float64(x)/float64(1000000)-avgExTime, 2)
+	}
+	stdev := math.Sqrt(vari / float64(Rounds))
+	fmt.Printf("\n Avg order exec time: %.4f ± %.4f ms \n", avgExTime, stdev)
+	// 计算平均偏差
+	// for _, x := range allExTime {
+	// 	vari += math.Abs(float64(x)/float64(1000000*Rounds) - avgExTime)
+	// }
+	// avgVari := vari / float64(Rounds)
+	// fmt.Printf("\n Avg order exec time: %.4f ± %.4f ms \n", avgExTime, avgVari)
 }

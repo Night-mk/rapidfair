@@ -52,6 +52,7 @@ func (timeout TimeoutMsg) String() string {
 }
 
 // NewViewMsg is sent to the leader whenever a replica decides to advance to the next view.
+// replica决策推进view的时候发送NewViewMsg给leader
 // It contains the highest QC or TC known to the replica.
 type NewViewMsg struct {
 	ID       ID       // The ID of the replica who sent the message.
@@ -63,3 +64,17 @@ type NewViewMsg struct {
 type CommitEvent struct {
 	Commands int
 }
+
+// RapidFair: 在event中增加collectMsg类型
+type CollectMsg struct {
+	ID           ID
+	CollectTxSeq CollectTxSeq
+}
+
+func (col CollectMsg) String() string {
+	v := col.CollectTxSeq.View()
+	txSeq := col.CollectTxSeq.TxSeq()
+	return fmt.Sprintf("ID: %d, View: %d, TxSeqLen: %d", col.ID, v, len(txSeq))
+}
+
+// RapidFair END

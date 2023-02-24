@@ -11,6 +11,8 @@ import (
 	"github.com/relab/hotstuff/logging"
 	"github.com/relab/hotstuff/modules"
 
+	"github.com/relab/hotstuff/internal/proto/fairorderpb"
+
 	"github.com/relab/gorums"
 	"github.com/relab/hotstuff"
 	"github.com/relab/hotstuff/internal/proto/hotstuffpb"
@@ -28,6 +30,8 @@ type Replica struct {
 	pubKey        hotstuff.PublicKey
 	voteCancel    context.CancelFunc
 	newViewCancel context.CancelFunc
+	fairnode      *fairorderpb.Node  // RapidFair: 为collect操作提供对象
+	collectCancel context.CancelFunc // RapidFair: 为Collect方法提供上下文取消
 	md            map[string]string
 }
 
@@ -52,6 +56,20 @@ func (r *Replica) Vote(cert hotstuff.PartialCert) {
 	pCert := hotstuffpb.PartialCertToProto(cert)
 	// 调用hotstuff_gorums.pb.go的Vote()方法发给所有其他人
 	r.node.Vote(ctx, pCert, gorums.WithNoSendWaiting())
+}
+
+// RapidFair: collect发送交易序列（或交易序列哈希）给其他replica
+func (r *Replica) Collect(col hotstuff.CollectTxSeq) {
+	if r.node == nil {
+		return
+	}
+	var ctx context.Context
+	r.collectCancel()
+	// 初始化collect的上下文
+	ctx, r.collectCancel = context.WithCancel(context.Background())
+	cTxSeq := fairorderpb.TxSeqToProto(col)
+	// 调用fairorder_gorums.pb.go的Collect()发送collect给其他节点，怎么确定发送给leader？
+	r.fairnode.Collect(ctx, cTxSeq, gorums.WithNoSendWaiting())
 }
 
 // NewView sends the quorum certificate to the other replica.
@@ -80,6 +98,7 @@ type Config struct {
 	subConfig
 }
 
+// subConfig实现了modules.Configuration接口
 type subConfig struct {
 	eventLoop    *eventloop.EventLoop
 	logger       logging.Logger
@@ -188,6 +207,7 @@ type ReplicaInfo struct {
 }
 
 // Connect opens connections to the replicas in the configuration.
+// RapidFair: baseline 增加参数初始化
 func (cfg *Config) Connect(replicas []ReplicaInfo) (err error) {
 	opts := cfg.opts
 	cfg.opts = nil // options are not needed beyond this point, so we delete them.
@@ -210,6 +230,7 @@ func (cfg *Config) Connect(replicas []ReplicaInfo) (err error) {
 			pubKey:        replica.PubKey,
 			newViewCancel: func() {},
 			voteCancel:    func() {},
+			collectCancel: func() {}, // RapidFair: baseline新增collectCancel初始化
 			md:            make(map[string]string),
 		}
 		// we do not want to connect to ourself
@@ -289,6 +310,7 @@ func (cfg *subConfig) QuorumSize() int {
 }
 
 // Propose sends the block to all replicas in the configuration
+// config是发送block给所有节点
 func (cfg *subConfig) Propose(proposal hotstuff.ProposeMsg) {
 	if cfg.cfg == nil {
 		return

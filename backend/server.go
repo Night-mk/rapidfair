@@ -18,6 +18,8 @@ import (
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/peer"
 	"google.golang.org/grpc/status"
+
+	"github.com/relab/hotstuff/internal/proto/fairorderpb"
 )
 
 // Server is the Server-side of the gorums backend.
@@ -203,4 +205,20 @@ func (impl *serviceImpl) Timeout(ctx gorums.ServerCtx, msg *hotstuffpb.TimeoutMs
 
 type replicaConnected struct {
 	ctx context.Context
+}
+
+// RapidFair: Collect处理远程replica节点输入的proto collect消息
+func (impl *serviceImpl) Collect(ctx gorums.ServerCtx, col *fairorderpb.CollectTxSeq) {
+	// 从context中获取发送消息的replica的ID
+	id, err := GetPeerIDFromContext(ctx, impl.srv.configuration)
+	if err != nil {
+		impl.srv.logger.Infof("Failed to get client ID: %v", err)
+		return
+	}
+
+	// 将构建的collectMsg传输给eventLoop处理， AddEvent主要是增加事件
+	impl.srv.eventLoop.AddEvent(hotstuff.CollectMsg{
+		ID:           id,
+		CollectTxSeq: fairorderpb.TxSeqFromProto(col),
+	})
 }

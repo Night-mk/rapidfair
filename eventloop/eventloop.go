@@ -23,7 +23,7 @@ type EventHandler func(event any)
 type EventLoop struct {
 	mut sync.Mutex
 
-	eventQ        queue
+	eventQ        queue // 事件队列
 	waitingEvents map[reflect.Type][]any
 
 	handlers  map[reflect.Type]EventHandler
@@ -47,19 +47,22 @@ func New(bufferSize uint) *EventLoop {
 
 // RegisterHandler registers a handler for events with the same type as the 'eventType' argument.
 // There can be only one handler per event type, and the handler is executed after any observers.
-// eventType：输入事件类型，handler输入事件处理函数
+// eventType: 输入事件类型，handler: 输入事件处理函数
+// 在hanlders里存储注册的事件
 func (el *EventLoop) RegisterHandler(eventType any, handler EventHandler) {
 	el.handlers[reflect.TypeOf(eventType)] = handler
 }
 
 // RegisterObserver registers an observer for events with the same type as the 'eventType' argument.
 // The observers are executed before the handler.
+//
+//	注册观察者事件，在observer中存储事件（通常用于测试）
 func (el *EventLoop) RegisterObserver(eventType any, observer EventHandler) {
 	t := reflect.TypeOf(eventType)
 	el.observers[t] = append(el.observers[t], observer)
 }
 
-// AddEvent adds an event to the event queue.
+// AddEvent adds an event to the event queue. 在eventQ里增加事件
 func (el *EventLoop) AddEvent(event any) {
 	if event != nil {
 		el.eventQ.push(event)

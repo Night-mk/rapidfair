@@ -17,6 +17,7 @@ import (
 	"github.com/relab/hotstuff/client"
 	"github.com/relab/hotstuff/consensus"
 	"github.com/relab/hotstuff/consensus/byzantine"
+	"github.com/relab/hotstuff/consensus/orderfairness"
 	"github.com/relab/hotstuff/crypto"
 	"github.com/relab/hotstuff/crypto/keygen"
 	"github.com/relab/hotstuff/eventloop"
@@ -165,6 +166,7 @@ func (w *Worker) createReplica(opts *orchestrationpb.ReplicaOpts) (*replica.Repl
 	// prepare modules
 	builder := modules.NewBuilder(hotstuff.ID(opts.GetID()), privKey)
 
+	// consensusRules确定了初始化哪种共识
 	consensusRules, ok := modules.GetModule[consensus.Rules](opts.GetConsensus())
 	if !ok {
 		return nil, fmt.Errorf("invalid consensus name: '%s'", opts.GetConsensus())
@@ -195,17 +197,27 @@ func (w *Worker) createReplica(opts *orchestrationpb.ReplicaOpts) (*replica.Repl
 		float64(opts.GetTimeoutMultiplier()),
 	))
 
+	// 在创建一个replica时，一次在builder里增加多个模块
 	builder.Add(
-		eventloop.New(1000),
+		eventloop.New(1000), // 定死了eventloop的buffer只有1000个？一个replica
 		consensus.New(consensusRules),
-		consensus.NewVotingMachine(),
+		consensus.NewVotingMachine(),     // 增加votemachine
 		crypto.NewCache(cryptoImpl, 100), // TODO: consider making this configurable
 		leaderRotation,
 		sync,
-		w.metricsLogger,
+		w.metricsLogger, // 这里注册了metric的日志
 		blockchain.New(),
 		logging.New("hs"+strconv.Itoa(int(opts.GetID()))),
 	)
+
+	// RapidFair: baseline 设置是否使用fairorder, collect等
+	if opts.GetUseFairOrder() {
+		builder.Add(
+			orderfairness.NewCollectMachine(), // 增加CollectMachine module
+		)
+		builder.Options().SetUseFairOrder()
+		builder.Options().SetThemisGamma(opts.GetThemisGamma())
+	}
 
 	builder.Options().SetSharedRandomSeed(opts.GetSharedSeed())
 
@@ -229,7 +241,7 @@ func (w *Worker) createReplica(opts *orchestrationpb.ReplicaOpts) (*replica.Repl
 		TLS:         opts.GetUseTLS(),
 		Certificate: &certificate,
 		RootCAs:     rootCAs,
-		BatchSize:   opts.GetBatchSize(),
+		BatchSize:   opts.GetBatchSize(), // 这里设置batchsize
 		ManagerOptions: []gorums.ManagerOption{
 			gorums.WithDialTimeout(opts.GetConnectTimeout().AsDuration()),
 			gorums.WithGrpcDialOptions(grpc.WithReturnConnectionError()),
@@ -290,7 +302,7 @@ func (w *Worker) startClients(req *orchestrationpb.StartClientRequest) (*orchest
 			RootCAs:       cp,
 			MaxConcurrent: opts.GetMaxConcurrent(),
 			PayloadSize:   opts.GetPayloadSize(),
-			Input:         io.NopCloser(rand.Reader),
+			Input:         io.NopCloser(rand.Reader), // 配置输入流从io.NopCloser输入？
 			ManagerOptions: []gorums.ManagerOption{
 				gorums.WithDialTimeout(opts.GetConnectTimeout().AsDuration()),
 				gorums.WithGrpcDialOptions(grpc.WithReturnConnectionError()),

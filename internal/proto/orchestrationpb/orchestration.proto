@@ -51,6 +51,13 @@ message ReplicaOpts {
   int64 SharedSeed = 20;
   // A list of modules to load.
   repeated string Modules = 21;
+  
+  // RapidFair: baseline 在orchestration中增加对Collect的配置(collect可能有多个版本，所以还是先设置成module来处理感觉比较好)
+  string FairOrderCollect = 22;
+  // 增加对orderfairness协议的控制
+  bool UseFairOrder = 23;
+  // 增加Themis gamma参数 float32类型
+  float ThemisGamma = 24;
 }
 
 // ReplicaInfo is the information that the replicas need about each other.
@@ -72,15 +79,15 @@ message ClientOpts {
   uint32 ID = 1;
   // Determines whether TLS should be used.
   bool UseTLS = 4;
-  // The maximum number of concurrent requests.
+  // The maximum number of concurrent requests. 并行请求的最大数量
   uint32 MaxConcurrent = 8;
-  // The size in bytes of each command.
+  // The size in bytes of each command. 每个command的最大size
   uint32 PayloadSize = 9;
   // The timeout of the initial connection.
   google.protobuf.Duration ConnectTimeout = 10;
-  // The limit on how many commands can be sent per second.
+  // The limit on how many commands can be sent per second. 设置每秒发送的交易数量
   double RateLimit = 11;
-  // The amount of commands per second to increase the rate limit by.
+  // The amount of commands per second to increase the rate limit by. 每秒增加速率限制的命令
   double RateStep = 12;
   // How often to increase the rate limit.
   google.protobuf.Duration RateStepInterval = 13;

@@ -1,6 +1,7 @@
 // Package client implements a simple client for testing HotStuff.
 // The client reads data from an input stream and sends the data in commands to a HotStuff replica.
 // The client waits for replies from f+1 replicas before it considers a command to be executed.
+// client从input stream读取数据
 package client
 
 import (
@@ -72,7 +73,7 @@ type Client struct {
 	pendingCmds      chan pendingCmd
 	cancel           context.CancelFunc
 	done             chan struct{}
-	reader           io.ReadCloser
+	reader           io.ReadCloser // 类型是ReadCloser
 	limiter          *rate.Limiter
 	stepUp           float64
 	stepUpInterval   time.Duration
@@ -89,6 +90,7 @@ func (c *Client) InitModule(mods *modules.Core) {
 }
 
 // New returns a new Client.
+// Config结构作为初始化传入参数
 func New(conf Config, builder modules.Builder) (client *Client) {
 	client = &Client{
 		pendingCmds:      make(chan pendingCmd, conf.MaxConcurrent),
@@ -196,6 +198,7 @@ func (c *Client) close() {
 	}
 }
 
+// 客户端发送消息到replica的方法
 func (c *Client) sendCommands(ctx context.Context) error {
 	var (
 		num         uint64 = 1
@@ -210,6 +213,7 @@ loop:
 		}
 
 		// step up the rate limiter
+		// 设置发送速率限制
 		now := time.Now()
 		if now.Sub(lastStep) > c.stepUpInterval {
 			c.limiter.SetLimit(c.limiter.Limit() + rate.Limit(c.stepUp))
@@ -231,6 +235,7 @@ loop:
 		}
 
 		data := make([]byte, c.payloadSize)
+		// 从哪里读取data数据？输入流是哪里？[读入的是随机数据]
 		n, err := c.reader.Read(data)
 		if err != nil && err != io.EOF {
 			// if we get an error other than EOF
@@ -247,6 +252,9 @@ loop:
 		}
 
 		ctx, cancel := context.WithTimeout(ctx, c.timeout)
+		// ExecCommand sends a command to all replicas and waits for valid signatures from f+1 replicas
+		// ExecCommand发送一个command给所有replicas，并等待f+1个replica的valid sigs
+		// ExecCommand在./replica/clientsrv.go中实现
 		promise := c.gorumsConfig.ExecCommand(ctx, cmd)
 		pending := pendingCmd{sequenceNumber: num, sendTime: time.Now(), promise: promise, cancelCtx: cancel}
 
@@ -256,9 +264,10 @@ loop:
 		case <-ctx.Done():
 			break loop
 		}
-
+		// 确实每个循环只发一个消息？
 		if num%100 == 0 {
 			c.logger.Infof("%d commands sent", num)
+			c.logger.Infof("payloadSize: %d", c.payloadSize)
 		}
 
 	}
@@ -268,6 +277,7 @@ loop:
 // handleCommands will get pending commands from the pendingCmds channel and then
 // handle them as they become acknowledged by the replicas. We expect the commands to be
 // acknowledged in the order that they were sent.
+// 这个方法为啥没return三个值?
 func (c *Client) handleCommands(ctx context.Context) (executed, failed, timeout int) {
 	for {
 		var (
@@ -302,6 +312,7 @@ func (c *Client) handleCommands(ctx context.Context) (executed, failed, timeout 
 		c.mut.Unlock()
 
 		duration := time.Since(cmd.sendTime)
+		// client收到消息后再eventloop中增加LatencyMeasurementEvent事件
 		c.eventLoop.AddEvent(LatencyMeasurementEvent{Latency: duration})
 	}
 }

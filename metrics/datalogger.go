@@ -13,6 +13,7 @@ import (
 )
 
 // Logger logs data in protobuf message format.
+// 以protobuf数据格式记录数据
 type Logger interface {
 	Log(proto.Message)
 	io.Closer

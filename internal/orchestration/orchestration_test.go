@@ -36,7 +36,7 @@ func TestOrchestration(t *testing.T) {
 			ClientOpts: &orchestrationpb.ClientOpts{
 				ConnectTimeout: durationpb.New(time.Second),
 				MaxConcurrent:  250,
-				PayloadSize:    100,
+				PayloadSize:    100, // 这里设置客户端发送消息的负载为100
 				RateLimit:      math.Inf(1),
 				Timeout:        durationpb.New(500 * time.Millisecond),
 			},

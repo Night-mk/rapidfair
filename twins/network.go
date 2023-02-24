@@ -383,6 +383,14 @@ func (r *replica) NewView(si hotstuff.SyncInfo) {
 	})
 }
 
+// 增加Collect方法
+func (r *replica) Collect(col hotstuff.CollectTxSeq) {
+	r.config.sendMessage(r.id, hotstuff.CollectMsg{
+		ID:           r.config.node.opts.ID(),
+		CollectTxSeq: col,
+	})
+}
+
 func (r *replica) Metadata() map[string]string {
 	return r.config.network.replicas[r.id][0].opts.ConnectionMetadata()
 }

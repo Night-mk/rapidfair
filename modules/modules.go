@@ -12,10 +12,16 @@ import (
 
 // CommandQueue is a queue of commands to be proposed.
 type CommandQueue interface {
-	// Get returns the next command to be proposed.
+	// Get returns the next command to be proposed. Get返回下一个需要propose的command
 	// It may run until the context is cancelled.
 	// If no command is available, the 'ok' return value should be false.
 	Get(ctx context.Context) (cmd hotstuff.Command, ok bool)
+
+	// RapidFair: baseline GetTxBatch让replica返回下一个希望提交的交易序列
+	GetTxBatch(ctx context.Context) (cmd hotstuff.Command, ok bool)
+
+	// RapidFair: baseline 获取当前最高提交的交易序列号
+	GetHighProposedSeqNum() uint64
 }
 
 //go:generate mockgen -destination=../internal/mocks/acceptor_mock.go -package=mocks . Acceptor
@@ -100,6 +106,8 @@ type Replica interface {
 	NewView(hotstuff.SyncInfo)
 	// Metadata returns the connection metadata sent by this replica.
 	Metadata() map[string]string
+	// RapidFair: 接口中增加Collect方法，在./backend/config.go中实现
+	Collect(hotstuff.CollectTxSeq)
 }
 
 //go:generate mockgen -destination=../internal/mocks/configuration_mock.go -package=mocks . Configuration
@@ -139,6 +147,8 @@ type Consensus interface {
 	CommittedBlock() *hotstuff.Block
 	// ChainLength returns the number of blocks that need to be chained together in order to commit.
 	ChainLength() int
+	// RapiFair: baseline FairPropose输入公平排序数据用于提出proposal
+	FairPropose(cert hotstuff.SyncInfo, cmd hotstuff.Command, txSeq map[hotstuff.ID]hotstuff.Command)
 }
 
 // LeaderRotation implements a leader rotation scheme.
@@ -208,4 +218,13 @@ func (fhw forkHandlerWrapper) InitModule(mods *Core) {
 
 func (fhw forkHandlerWrapper) Fork(block *hotstuff.Block) {
 	fhw.forkHandler.Fork(block.Command())
+}
+
+// RapidFair: baseline 增加collect模块
+// Collector实现交易序列收集协议
+type Collector interface {
+	// 收集方法
+	Collect(syncInfo hotstuff.SyncInfo)
+	// 构建txList的方法
+	// ConstructTxList(txSeq map[hotstuff.ID]hotstuff.Command) ([][]string, map[string]uint32)
 }

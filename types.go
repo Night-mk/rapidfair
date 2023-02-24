@@ -168,14 +168,14 @@ func (pc PartialCert) ToBytes() []byte {
 	return append(pc.blockHash[:], pc.signature.ToBytes()...)
 }
 
-// SyncInfo holds the highest known QC or TC.
+// SyncInfo holds the highest known QC or TC. // SyncInfo存储最高的已知QC
 // Generally, if highQC.View > highTC.View, there is no need to include highTC in the SyncInfo.
 // However, if highQC.View < highTC.View, we should still include highQC.
 // This can also hold an AggregateQC for Fast-Hotstuff.
 type SyncInfo struct {
 	qc    *QuorumCert
 	tc    *TimeoutCert
-	aggQC *AggregateQC
+	aggQC *AggregateQC // 这个参数其实是为了fast-hotstuff准备的，先不用管
 }
 
 // NewSyncInfo returns a new SyncInfo struct.
@@ -383,3 +383,23 @@ func writeParticipants(wr io.Writer, participants IDSet) (err error) {
 	})
 	return err
 }
+
+// RapidFair: 在types里增加CollectTxSeq类型，并增加方法
+type CollectTxSeq struct {
+	view  View
+	txSeq Command
+}
+
+func NewCollectTxSeq(v View, txSeq Command) CollectTxSeq {
+	return CollectTxSeq{v, txSeq}
+}
+
+func (col CollectTxSeq) View() View {
+	return col.view
+}
+
+func (col CollectTxSeq) TxSeq() Command {
+	return col.txSeq
+}
+
+// RapidFair END

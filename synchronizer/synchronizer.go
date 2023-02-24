@@ -13,6 +13,7 @@ import (
 )
 
 // Synchronizer synchronizes replicas to the same view.
+// Synchronizer将replicas同步到同一个view
 type Synchronizer struct {
 	blockChain     modules.BlockChain
 	consensus      modules.Consensus
@@ -22,6 +23,7 @@ type Synchronizer struct {
 	leaderRotation modules.LeaderRotation
 	logger         logging.Logger
 	opts           *modules.Options
+	col            modules.Collector // RapidFair: baseline 增加调用collect的模块
 
 	currentView hotstuff.View
 	highTC      hotstuff.TimeoutCert
@@ -91,7 +93,7 @@ func New(viewDuration ViewDuration) modules.Synchronizer {
 		leafBlock:   hotstuff.GetGenesis(),
 		currentView: 1,
 
-		viewCtx:   ctx,
+		viewCtx:   ctx, // 创建空上下文
 		cancelCtx: cancel,
 
 		duration: viewDuration,
@@ -113,6 +115,7 @@ func (s *Synchronizer) Start(ctx context.Context) {
 		<-ctx.Done()
 		s.timer.Stop()
 	}()
+	// RapidFair: baseline 在开始第一次propose之前先执行collect
 
 	// start the initial proposal
 	if s.currentView == 1 && s.leaderRotation.GetLeader(s.currentView) == s.opts.ID() {
@@ -131,11 +134,13 @@ func (s *Synchronizer) LeafBlock() *hotstuff.Block {
 }
 
 // View returns the current view.
+// 返回当前的view到底是怎么同步的？
 func (s *Synchronizer) View() hotstuff.View {
 	return s.currentView
 }
 
 // ViewContext returns a context that is cancelled at the end of the view.
+// ViewContext返回一个上下文，在每个view的最后被cancelled
 func (s *Synchronizer) ViewContext() context.Context {
 	return s.viewCtx
 }
@@ -257,6 +262,7 @@ func (s *Synchronizer) OnRemoteTimeout(timeout hotstuff.TimeoutMsg) {
 	s.AdvanceView(si)
 }
 
+// 处理consensus.NewViewMsg消息
 // OnNewView handles an incoming consensus.NewViewMsg
 func (s *Synchronizer) OnNewView(newView hotstuff.NewViewMsg) {
 	s.AdvanceView(newView.SyncInfo)
@@ -264,11 +270,12 @@ func (s *Synchronizer) OnNewView(newView hotstuff.NewViewMsg) {
 
 // AdvanceView attempts to advance to the next view using the given QC.
 // qc must be either a regular quorum certificate, or a timeout certificate.
+// 这里传入的是newView的SyncInfo
 func (s *Synchronizer) AdvanceView(syncInfo hotstuff.SyncInfo) {
 	v := hotstuff.View(0)
 	timeout := false
 
-	// check for a TC
+	// check for a TC (timeout cert)
 	if tc, ok := syncInfo.TC(); ok {
 		if !s.crypto.VerifyTimeoutCert(tc) {
 			s.logger.Info("Timeout Certificate could not be verified!")
@@ -299,6 +306,7 @@ func (s *Synchronizer) AdvanceView(syncInfo hotstuff.SyncInfo) {
 		// ensure that the true highQC is the one stored in the syncInfo
 		syncInfo = syncInfo.WithQC(highQC)
 		qc = highQC
+		// s.logger.Infof("checkQC: view=%d", s.currentView) // default run不走这一步
 	} else if qc, haveQC = syncInfo.QC(); haveQC {
 		if !s.crypto.VerifyQuorumCert(qc) {
 			s.logger.Info("Quorum Certificate could not be verified!")
@@ -325,7 +333,7 @@ func (s *Synchronizer) AdvanceView(syncInfo hotstuff.SyncInfo) {
 		s.duration.ViewSucceeded()
 	}
 
-	s.currentView = v + 1
+	s.currentView = v + 1 // 这里的currentView改变后，其他模块引用的synchronizer模块的view是否会更新？（假设是可以更新的）
 	s.lastTimeout = nil
 	s.duration.ViewStarted()
 
@@ -335,14 +343,31 @@ func (s *Synchronizer) AdvanceView(syncInfo hotstuff.SyncInfo) {
 	s.timer.Reset(duration)
 
 	s.logger.Debugf("advanced to view %d", s.currentView)
+	// ViewChangeEvent的处理在./metrics/timeouts.go，处理只做了numViews++
 	s.eventLoop.AddEvent(ViewChangeEvent{View: s.currentView, Timeout: timeout})
 
-	leader := s.leaderRotation.GetLeader(s.currentView)
-	if leader == s.opts.ID() {
-		s.consensus.Propose(syncInfo)
-	} else if replica, ok := s.configuration.Replica(leader); ok {
-		replica.NewView(syncInfo)
+	// RapidFair: baseline 使用参数控制在order fairness模式下调用collect
+	// 先collect，之后再propose
+	if s.opts.UseFairOrder() {
+		s.col.Collect(syncInfo)
+	} else {
+		leader := s.leaderRotation.GetLeader(s.currentView)
+		if leader == s.opts.ID() { // 如果当前节点是leader
+			// s.logger.Infof("leader advanced to view %d", s.currentView)
+			s.consensus.Propose(syncInfo) // 推进view的时候leader节点就直接调用propose方法了
+		} else if replica, ok := s.configuration.Replica(leader); ok {
+			// 如果当前节点不是leader，并且leader
+			replica.NewView(syncInfo) // 这里调用了./backend/config.go中的NewView
+		}
 	}
+
+	// leader := s.leaderRotation.GetLeader(s.currentView)
+	// if leader == s.opts.ID() {
+	// 	s.consensus.Propose(syncInfo)
+	// } else if replica, ok := s.configuration.Replica(leader); ok {
+	// 	replica.NewView(syncInfo)
+	// }
+
 }
 
 // updateHighQC attempts to update the highQC, but does not verify the qc first.

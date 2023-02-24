@@ -7,6 +7,7 @@ import (
 	"github.com/relab/hotstuff/modules"
 )
 
+// 拜占庭行为包括两种：silence（replica从不propose），fork（具体不太清楚）
 func init() {
 	modules.RegisterModule("silence", func() Byzantine { return &silence{} })
 	modules.RegisterModule("fork", func() Byzantine { return &fork{} })

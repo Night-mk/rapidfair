@@ -1,5 +1,7 @@
 module github.com/relab/hotstuff
 
+// module github.com/Night-mk/rapidfair
+
 go 1.18
 
 require (

@@ -1,6 +1,8 @@
 package hotstuffpb
 
 import (
+	"encoding/json"
+	fmt "fmt"
 	"math/big"
 
 	"github.com/relab/hotstuff"
@@ -114,12 +116,18 @@ func ProposalFromProto(p *Proposal) (proposal hotstuff.ProposeMsg) {
 // BlockToProto converts a consensus.Block to a hotstuffpb.Block.
 func BlockToProto(block *hotstuff.Block) *Block {
 	parentHash := block.Parent()
+	// RapidFair: baseline 将TxSeq map转为[]bytes
+	txSeqB, err := json.Marshal(block.TxSeq())
+	if err != nil {
+		fmt.Printf("[BlockToProto]: TxSeq serialization error: err=%v", err)
+	}
 	return &Block{
 		Parent:   parentHash[:],
 		Command:  []byte(block.Command()),
 		QC:       QuorumCertToProto(block.QuorumCert()),
 		View:     uint64(block.View()),
 		Proposer: uint32(block.Proposer()),
+		TxSeq:    txSeqB, // 增加TxSeq字段
 	}
 }
 
@@ -127,13 +135,30 @@ func BlockToProto(block *hotstuff.Block) *Block {
 func BlockFromProto(block *Block) *hotstuff.Block {
 	var p hotstuff.Hash
 	copy(p[:], block.GetParent())
-	return hotstuff.NewBlock(
-		p,
-		QuorumCertFromProto(block.GetQC()),
-		hotstuff.Command(block.GetCommand()),
-		hotstuff.View(block.GetView()),
-		hotstuff.ID(block.GetProposer()),
-	)
+	// 反序列化TxSeq, []bytes转为map
+	txSeq := make(map[hotstuff.ID]hotstuff.Command)
+	err := json.Unmarshal(block.GetTxSeq(), &txSeq)
+	if err != nil {
+		fmt.Printf("[BlockFromProto]: TxSeq unserialization error: err=%v", err)
+	}
+	if len(txSeq) > 0 { // order-fairness block
+		return hotstuff.NewFairBlock(
+			p,
+			QuorumCertFromProto(block.GetQC()),
+			hotstuff.Command(block.GetCommand()),
+			hotstuff.View(block.GetView()),
+			hotstuff.ID(block.GetProposer()),
+			txSeq,
+		)
+	} else {
+		return hotstuff.NewBlock(
+			p,
+			QuorumCertFromProto(block.GetQC()),
+			hotstuff.Command(block.GetCommand()),
+			hotstuff.View(block.GetView()),
+			hotstuff.ID(block.GetProposer()),
+		)
+	}
 }
 
 // TimeoutMsgFromProto converts a TimeoutMsg proto to the hotstuff type.

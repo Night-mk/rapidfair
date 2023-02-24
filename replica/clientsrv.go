@@ -19,7 +19,7 @@ import (
 	"google.golang.org/protobuf/types/known/emptypb"
 )
 
-// clientSrv serves a client.
+// clientSrv serves a client. （将client作为一个server）
 type clientSrv struct {
 	eventLoop *eventloop.EventLoop
 	logger    logging.Logger
@@ -36,7 +36,7 @@ func newClientServer(conf Config, srvOpts []gorums.ServerOption) (srv *clientSrv
 	srv = &clientSrv{
 		awaitingCmds: make(map[cmdID]chan<- error),
 		srv:          gorums.NewServer(srvOpts...),
-		cmdCache:     newCmdCache(int(conf.BatchSize)),
+		cmdCache:     newCmdCache(int(conf.BatchSize)), // 通过conf.BatchSize定义
 		hash:         sha256.New(),
 	}
 	clientpb.RegisterClientServer(srv.srv, srv)
@@ -82,12 +82,14 @@ func (srv *clientSrv) ExecCommand(ctx gorums.ServerCtx, cmd *clientpb.Command) (
 	srv.awaitingCmds[id] = c
 	srv.mut.Unlock()
 
-	srv.cmdCache.addCommand(cmd)
+	srv.cmdCache.addCommand(cmd) // 使用cmdCache接收发送到的tx
 	ctx.Release()
 	err := <-c
 	return &emptypb.Empty{}, err
 }
 
+// 实现了modules.ExecutorExt接口
+// 执行当前block，在eventloop中增加hotstuff.CommitEvent
 func (srv *clientSrv) Exec(cmd hotstuff.Command) {
 	batch := new(clientpb.Batch)
 	err := proto.UnmarshalOptions{AllowPartial: true}.Unmarshal([]byte(cmd), batch)
@@ -96,6 +98,7 @@ func (srv *clientSrv) Exec(cmd hotstuff.Command) {
 		return
 	}
 
+	// CommitEvent可以被metric.troughput捕获并处理
 	srv.eventLoop.AddEvent(hotstuff.CommitEvent{Commands: len(batch.GetCommands())})
 
 	for _, cmd := range batch.GetCommands() {

@@ -70,6 +70,12 @@ func (g *Graph) deleteVertex(key VT) {
 	if g.edgeList[key] != nil {
 		delete(g.edgeList, key)
 	}
+	// 如果顶点key在其他顶点的列表里，则也删除
+	for k, v := range g.edgeList {
+		if _, ok := v[key]; ok {
+			delete(g.edgeList[k], key)
+		}
+	}
 }
 
 // 增加边（有向边）
@@ -151,10 +157,6 @@ func findVertex(txList [][]string, n int, f int) ([]string, [][]string) {
 
 	failVerts := make(map[string]int)
 	txListNew := make([][]string, len(txList))
-	// for i, _ := range txListCopy { // 深度copy当前的txList
-	// 	txListCopy[i] = make([]string, len(txList[i]))
-	// 	copy(txListCopy[i], txList[i])
-	// }
 
 	// 计算交易出现的数量
 	for _, v1 := range txList {
@@ -178,13 +180,15 @@ func findVertex(txList [][]string, n int, f int) ([]string, [][]string) {
 	// 删除交易序列中不能加入图的交易
 	if len(failVerts) > 0 {
 		for k1, v1 := range txList {
-			txListNew[k1] = make([]string, 0, 0)
+			txListNew[k1] = make([]string, 0)
 			for _, v2 := range v1 {
 				if _, ok := failVerts[v2]; !ok { // 把不在fail中的交易加入新txList
 					txListNew[k1] = append(txListNew[k1], v2)
 				}
 			}
 		}
+	} else {
+		return vertList, txList
 	}
 
 	return vertList, txListNew
@@ -258,13 +262,13 @@ type SccData struct {
 func InitScc(g1 *Graph) *SccData {
 	sd := &SccData{
 		g:     g1,
-		dnf:   make(map[VT]int),
-		low:   make(map[VT]int),
-		stack: make(map[int]VT),
-		vis:   make(map[VT]int),
-		deep:  0,
+		dnf:   make(map[VT]int), // 表示这个点在DFS时是第几个被搜到的
+		low:   make(map[VT]int), // 表示这个点以及其子孙节点连的所有点中dfn最小的值
+		stack: make(map[int]VT), // 表示当前所有可能能构成强连通分量的点
+		vis:   make(map[VT]int), // 表示一个点是否在stack[]数组中
+		deep:  0,                // dnf的初始值
 		top:   0,
-		scc:   make([][]VT, 0),
+		scc:   make([][]VT, 0), // 记录强连通分量
 	}
 	return sd
 }
@@ -273,14 +277,14 @@ func InitScc(g1 *Graph) *SccData {
 func (sd *SccData) tarjanScc(u VT) {
 	sd.deep += 1
 	sd.dnf[u] = sd.deep
-	sd.low[u] = sd.deep
-	sd.vis[u] = 1
+	sd.low[u] = sd.deep // 记录顶点和其子孙顶点连接的所有顶点中最小的dfn
+	sd.vis[u] = 1       // 访问过顶点u记录=1
 
 	sd.top += 1
-	sd.stack[sd.top] = u
+	sd.stack[sd.top] = u // 将没有访问过的顶点入栈
 
-	sz := sd.g.edgeList[u]
-	for v, _ := range sz {
+	sz := sd.g.edgeList[u] // 获取节点u的所有邻接顶点 sz=map[VT]*Vertex
+	for v := range sz {
 		if _, ok := sd.dnf[v]; !ok { // 如果顶点v还没有被搜索过
 			sd.tarjanScc(v)
 			if sd.low[u] > sd.low[v] {
@@ -311,13 +315,15 @@ func (sd *SccData) tarjanScc(u VT) {
 		}
 		scc_temp = append(scc_temp, sd.stack[sd.top])
 		sd.top -= 1
-		var scc_temp_str []VT
-
-		// 排序scc_temp中顶点的顺序（反向取出）
-		for i := len(scc_temp) - 1; i >= 0; i-- {
-			scc_temp_str = append(scc_temp_str, scc_temp[i])
+		// 将强连通分量数量>1的顶点列表加入scc
+		if len(scc_temp) > 1 {
+			var scc_temp_str []VT
+			// 排序scc_temp中顶点的顺序（反向取出）
+			for i := len(scc_temp) - 1; i >= 0; i-- {
+				scc_temp_str = append(scc_temp_str, scc_temp[i])
+			}
+			sd.scc = append(sd.scc, scc_temp_str) // 将一个强连通分量里的顶点列表加入scc
 		}
-		sd.scc = append(sd.scc, scc_temp_str) // 将一个强连通分量里的顶点列表加入scc
 	}
 }
 
@@ -339,7 +345,7 @@ func graphCondensation(g *Graph, scc [][]VT) (*Graph, map[VT][]VT) {
 		// v是一个scc内的顶点集合, v1是scc中的顶点
 		for _, v1 := range v {
 			if _, ok := g.edgeList[v1]; ok {
-				for k, _ := range g.edgeList[v1] {
+				for k := range g.edgeList[v1] {
 					// 如果scc中顶点的出边不在缩合顶点的出边中，则增加出边
 					if _, ok := g.edgeList[newV][k]; !ok {
 						g.addEdge(newV, k)
@@ -353,7 +359,7 @@ func graphCondensation(g *Graph, scc [][]VT) (*Graph, map[VT][]VT) {
 		} // 此时图中仅包含不在scc中的顶点和缩合后的顶点
 
 		// 对有向图中所有顶点：如果出边中包含scc中的顶点，则删除这些顶点，并添加缩合顶点的边
-		for gv, _ := range g.vertList {
+		for gv := range g.vertList {
 			// 判断有向图顶点gv的出边是否和当前scc有交集，如果有则删除gv出边中的交集顶点，并替换缩合顶点
 			for gvEdge := range g.edgeList[gv] {
 				var interSec []VT
@@ -378,15 +384,16 @@ func graphCondensation(g *Graph, scc [][]VT) (*Graph, map[VT][]VT) {
 
 // 查找入度为0的顶点集合
 func findStartVertex(g *Graph) (V []VT, in_degrees map[VT]int) {
-	// in_degrees := make(map[VT]int)
+	in_degrees = make(map[VT]int)
 	gv := g.getVertices()
+	// fmt.Println("find start v len(v): ", len(gv))
 	// 筛选所有入度为0的顶点
 	for _, u := range gv {
 		in_degrees[u] = 0
 	}
 	for _, u := range gv {
 		if len(g.edgeList[u]) > 0 {
-			for v, _ := range g.edgeList[u] {
+			for v := range g.edgeList[u] {
 				in_degrees[v] += 1
 			}
 		}
@@ -399,7 +406,6 @@ func findStartVertex(g *Graph) (V []VT, in_degrees map[VT]int) {
 	// 如果没有入度为0的节点，说明整个图都是强连通的
 	// 此时删除图中第一个顶点的所有入边,再返回第一个顶点
 	if len(V) == 0 {
-		fmt.Println()
 		firstVert := gv[0]
 		for _, u := range gv {
 			if len(g.edgeList[u]) > 0 {
@@ -416,20 +422,20 @@ func findStartVertex(g *Graph) (V []VT, in_degrees map[VT]int) {
 // 对图G'进行拓扑排序
 func topoSort(g *Graph) (Seq []VT) {
 	V, in_degrees := findStartVertex(g) // 查找入度为0的顶点集合
-	vNum := len(g.getVertices())
+	// fmt.Println("Verts in=0: ", V)
+	// fmt.Println("in_degrees: ", in_degrees)
+	vNum := len(g.getVertices()) // 记录总顶点数量
 	for {
 		if len(V) > 0 {
 			u := V[0]
 			V = V[1:] // 删除V中第一个元素
 			Seq = append(Seq, u)
 			// 将u的所有出边的顶点中入度为0的顶点加入到V
-			if g.edgeList[u] != nil {
-				if len(g.edgeList[u]) > 0 {
-					for v, _ := range g.edgeList[u] {
-						in_degrees[v] -= 1
-						if in_degrees[v] == 0 {
-							V = append(V, v)
-						}
+			if _, ok := g.edgeList[u]; ok {
+				for v := range g.edgeList[u] {
+					in_degrees[v] -= 1
+					if in_degrees[v] == 0 {
+						V = append(V, v)
 					}
 				}
 			}
@@ -438,10 +444,10 @@ func topoSort(g *Graph) (Seq []VT) {
 		}
 	}
 
-	if len(Seq) == vNum {
+	if len(Seq) == vNum { // 拓扑排序的顶点数 = 总顶点数量 时，才输出
 		return Seq
 	} else {
-		fmt.Printf("TopoSort ERROR! len seq: %d, len graph vetex: %d", len(Seq), vNum)
+		fmt.Printf("TopoSort ERROR! len seq: %d, len graph vetex: %d\n", len(Seq), vNum)
 		return nil
 	}
 }
@@ -454,9 +460,10 @@ func finalSort(topoSeq []VT, sccSeq map[VT][]VT) (finalSeq []VT) {
 			finalSeq = append(finalSeq, item)
 		} else {
 			// 如果交易在scc里，则将scc的序列加入到最终序列
-			for _, v := range sccSeq[item] {
-				finalSeq = append(finalSeq, v)
-			}
+			finalSeq = append(finalSeq, sccSeq[item]...)
+			// for _, v := range sccSeq[item] {
+			// 	finalSeq = append(finalSeq, v)
+			// }
 		}
 	}
 	return finalSeq
@@ -471,7 +478,7 @@ func Metric_SuccessOrderRate(orderedSeq []VT, sendSeq []string) (sRate float32) 
 	var sendTxPair []string
 	matchNum := 0 // 统计成功排序的交易对数量
 	// 按排序顺序计算<交易对>
-	for i, _ := range orderedSeq {
+	for i := range orderedSeq {
 		if i < len(orderedSeq)-1 {
 			for j := i + 1; j < len(orderedSeq); j++ {
 				orderedTxPair = append(orderedTxPair, string(orderedSeq[i])+","+string(orderedSeq[j]))
@@ -479,7 +486,7 @@ func Metric_SuccessOrderRate(orderedSeq []VT, sendSeq []string) (sRate float32) 
 		}
 	}
 	// 按发送顺序计算<交易对>
-	for i, _ := range sendSeq {
+	for i := range sendSeq {
 		if i < len(sendSeq)-1 {
 			for j := i + 1; j < len(sendSeq); j++ {
 				sendTxPair = append(sendTxPair, sendSeq[i]+","+sendSeq[j])
@@ -516,12 +523,21 @@ func GetRemainTxList(txList []string, finalSeq []VT) (remainTxList []string) {
 // 实现Themis公平排序
 // 输入：交易序列，节点数，fault，gamma
 // 输出：排序后的交易序列
-func FairOrder_Themis(txList [][]string, nodeNum int, fault int, gamma float32) (finalTxSeq []VT) {
-	f := int(math.Floor(float64(nodeNum) / float64(fault)))
+func FairOrder_Themis(txList [][]string, nodeNum int, gamma float32) (finalTxSeq []VT) {
+	// func FairOrder_Themis(txList [][]string, nodeNum int, fault int, gamma float32) {
+	// 计算fault replica数量, Themis中：f<=(n-1)(2*gamma-1)/4
+	// f := int(math.Floor(float64(nodeNum) / float64(fault)))
+	f := int(math.Floor((float64(nodeNum-1) * float64(2*gamma-1)) / float64(4)))
+	// fmt.Println("fault replica num: ", f)
 	// 1. 交易列表 构建 -> 有向图
 	vertices, txListNew := findVertex(txList, nodeNum, f)
+	// fmt.Println("=====fair order part=====")
+	// fmt.Println("vertices: ", vertices)
+	// fmt.Println("ordered txs: ", txListNew)
 	edges := findEdges(txListNew, vertices, nodeNum, f, gamma)
+	// fmt.Println("edges: ", edges)
 	g := constructGraph(vertices, edges) // 构建有向图
+	// g.Print()
 	// 2. 排序有向图
 	// 2.1 查找有向图中的scc
 	sccdata := InitScc(g)
@@ -532,12 +548,16 @@ func FairOrder_Themis(txList [][]string, nodeNum int, fault int, gamma float32) 
 		}
 	}
 	scc := sccdata.getSCC()
+	// fmt.Println("check scc len: ", len(scc))
+	// fmt.Println("all scc: ", scc)
 	// 2.2 对有向图中的scc进行condensation（缩合），构建有向无环图，并排序scc中的交易
 	g1, sccSeq := graphCondensation(g, scc)
 	// 2.3 计算有向无环图的拓扑排序
 	topoSeq := topoSort(g1)
 	// 2.4 计算最终排序(拓扑排序+scc内部排序)
 	finalTxSeq = finalSort(topoSeq, sccSeq)
+
+	// fmt.Println("finalTxSeq: ", finalTxSeq)
 
 	return finalTxSeq
 }

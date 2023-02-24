@@ -12,6 +12,7 @@ import (
 )
 
 // ThroughputPlot is a plotter that plots throughput vs time.
+// 绘制TPS和time的关系图
 type ThroughputPlot struct {
 	startTimes   StartTimes
 	measurements MeasurementMap

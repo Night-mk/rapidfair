@@ -2,7 +2,7 @@ package metrics
 
 import "sync"
 
-// This file implements a registry for metrics.
+// This file implements a registry for metrics. 实现metrics注册表？
 // The purpose of the registry is to make it possible to instantiate multiple metrics based on their names only.
 // We distinguish between client metrics and replica metrics, but a single metric could work on both.
 

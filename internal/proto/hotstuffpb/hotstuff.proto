@@ -35,12 +35,21 @@ message Proposal {
 
 message BlockHash { bytes Hash = 1; }
 
+// message Block {
+//   bytes Parent = 1;
+//   QuorumCert QC = 2;
+//   uint64 View = 3;
+//   bytes Command = 4;
+//   uint32 Proposer = 5;
+// }
+// RapidFair: baseline 增加TxSeq字段，传输交易序列数组
 message Block {
   bytes Parent = 1;
   QuorumCert QC = 2;
   uint64 View = 3;
   bytes Command = 4;
   uint32 Proposer = 5;
+  bytes TxSeq = 6;
 }
 
 message ECDSASignature {

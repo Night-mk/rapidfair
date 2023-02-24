@@ -75,10 +75,11 @@ func init() {
 func initConfig() {
 	if cfgFile != "" {
 		// Use config file from the flag.
+		// 使用flag指定的config file
 		viper.SetConfigFile(cfgFile)
 	} else {
 		// Find home directory.
-		home, err := homedir.Dir()
+		home, err := homedir.Dir() // 返回$HOME目录
 		if err != nil {
 			fmt.Println(err)
 			os.Exit(1)

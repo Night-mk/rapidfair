@@ -3,6 +3,8 @@ package modules
 import "github.com/relab/hotstuff"
 
 // Options stores runtime configuration settings.
+// 存储运行时的配置设置，这里不能直接从cmd进行配置
+// 例如使用fasthotstuff时会启动使用特殊的模块
 type Options struct {
 	id         hotstuff.ID
 	privateKey hotstuff.PrivateKey
@@ -13,6 +15,9 @@ type Options struct {
 
 	sharedRandomSeed   int64
 	connectionMetadata map[string]string
+
+	useFairOrder bool    // RapidFair: baseline 控制是否使用order-fairness算法
+	themisGamma  float32 // RapidFair: baseline Themis协议gamma参数
 }
 
 // ID returns the ID.
@@ -79,4 +84,21 @@ func (opts *Options) SetSharedRandomSeed(seed int64) {
 // See: https://github.com/grpc/grpc-go/blob/master/Documentation/grpc-metadata.md#storing-binary-data-in-metadata
 func (opts *Options) SetConnectionMetadata(key string, value string) {
 	opts.connectionMetadata[key] = value
+}
+
+// RapidFair: baseline 读、写、存useFairOrder变量
+func (opts *Options) UseFairOrder() bool {
+	return opts.useFairOrder
+}
+
+func (opts *Options) SetUseFairOrder() {
+	opts.useFairOrder = true
+}
+
+func (opts *Options) ThemisGamma() float32 {
+	return opts.themisGamma
+}
+
+func (opts *Options) SetThemisGamma(gamma float32) {
+	opts.themisGamma = gamma
 }

@@ -45,7 +45,7 @@ func (vm *VotingMachine) InitModule(mods *modules.Core) {
 	vm.eventLoop.RegisterHandler(hotstuff.VoteMsg{}, func(event any) { vm.OnVote(event.(hotstuff.VoteMsg)) })
 }
 
-// OnVote handles an incoming vote.
+// OnVote handles an incoming vote. 应该只有当前View的Leader节点来处理
 func (vm *VotingMachine) OnVote(vote hotstuff.VoteMsg) {
 	cert := vote.PartialCert
 	vm.logger.Debugf("OnVote(%d): %.8s", vote.ID, cert.BlockHash())
@@ -83,7 +83,7 @@ func (vm *VotingMachine) OnVote(vote hotstuff.VoteMsg) {
 	if vm.opts.ShouldVerifyVotesSync() {
 		vm.verifyCert(cert, block)
 	} else {
-		go vm.verifyCert(cert, block)
+		go vm.verifyCert(cert, block) // 启动一个新的routine运行函数
 	}
 }
 
@@ -113,17 +113,20 @@ func (vm *VotingMachine) verifyCert(cert hotstuff.PartialCert, block *hotstuff.B
 	votes := vm.verifiedVotes[cert.BlockHash()]
 	votes = append(votes, cert)
 	vm.verifiedVotes[cert.BlockHash()] = votes
-
+	// 如果vote数量小于quorum时，就不做其他处理
 	if len(votes) < vm.configuration.QuorumSize() {
 		return
 	}
-
+	// vote数量超过quorum，则创建QC
 	qc, err := vm.crypto.CreateQuorumCert(block, votes)
 	if err != nil {
 		vm.logger.Info("OnVote: could not create QC for block: ", err)
 		return
 	}
 	delete(vm.verifiedVotes, cert.BlockHash())
-
+	// 为什么每次在接收到足够多vote最后都发送NewViewMsg来推进view？（默认采用pipelined结构hotstuff？）
+	// 处理NewViewMsg的方法在synchronizer.go中，使用AdvanceView()
 	vm.eventLoop.AddEvent(hotstuff.NewViewMsg{ID: vm.opts.ID(), SyncInfo: hotstuff.NewSyncInfo().WithQC(qc)})
 }
+
+// RapidFair: baseline 公平排序验证

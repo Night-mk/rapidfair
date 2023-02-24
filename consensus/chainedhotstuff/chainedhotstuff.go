@@ -9,7 +9,7 @@ import (
 )
 
 func init() {
-	modules.RegisterModule("chainedhotstuff", New)
+	modules.RegisterModule("chainedhotstuff", New) // 在这里注册了chainedhotstuff module
 }
 
 // ChainedHotStuff implements the pipelined three-phase HotStuff protocol.

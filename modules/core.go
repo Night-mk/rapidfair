@@ -50,7 +50,7 @@ type Core struct {
 	modules []any
 }
 
-// TryGet attempts to find a module for ptr.
+// TryGet attempts to find a module for ptr. 尝试利用指针寻找模块
 // TryGet returns true if a module was stored in ptr, false otherwise.
 //
 // NOTE: ptr must be a non-nil pointer to a type that has been provided to the module system.
