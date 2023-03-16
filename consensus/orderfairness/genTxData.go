@@ -82,7 +82,7 @@ func (st *SimTxData) memoList(txCommTime [][]float64) [][]string {
 		indexSort := Argsort(item) // 升序排序，并返回排序之前的索引
 		tml := make([]string, st.txNum)
 		for j, index := range indexSort {
-			tml[j] = "tx" + strconv.Itoa(index)
+			tml[j] = "tx" + strconv.Itoa(index) + "," + strconv.Itoa(index+1)
 		}
 		txMemoList = append(txMemoList, tml)
 	}
@@ -93,7 +93,7 @@ func (st *SimTxData) memoList(txCommTime [][]float64) [][]string {
 func (st *SimTxData) sendTxSeq() []string {
 	txSeq := make([]string, 0)
 	for i := 0; i < st.txNum; i++ {
-		txSeq = append(txSeq, "tx"+strconv.Itoa(i))
+		txSeq = append(txSeq, "tx"+strconv.Itoa(i)+","+strconv.Itoa(i+1))
 	}
 	return txSeq
 }

@@ -40,12 +40,13 @@ func (t *Throughput) InitModule(mods *modules.Core) {
 		&eventLoop,
 		&logger,
 	)
-
+	// 注册处理CommitEvent的函数，CommitEvent在./replica/clientsrv.go的Exec()中被加入
 	eventLoop.RegisterHandler(hotstuff.CommitEvent{}, func(event any) {
 		commitEvent := event.(hotstuff.CommitEvent)
 		t.recordCommit(commitEvent.Commands)
 	})
 
+	// tps注册观察者函数
 	eventLoop.RegisterObserver(types.TickEvent{}, func(event any) {
 		t.tick(event.(types.TickEvent))
 	})
@@ -66,6 +67,8 @@ func (t *Throughput) tick(tick types.TickEvent) {
 		Commands: t.commandCount,
 		Duration: durationpb.New(now.Sub(tick.LastTick)),
 	}
+	// 调用./metrics/datalogger.go 的func (dl *jsonLogger) Log(msg proto.Message)方法
+	// 将消息写入json文件？
 	t.metricsLogger.Log(event)
 	// reset count for next tick
 	t.commandCount = 0

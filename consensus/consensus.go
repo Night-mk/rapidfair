@@ -115,6 +115,7 @@ func (cs *consensusBase) CommittedBlock() *hotstuff.Block {
 }
 
 // StopVoting ensures that no voting happens in a view earlier than `view`.
+// StopVoting保证不会在`view`之前的view中发生投票
 func (cs *consensusBase) StopVoting(view hotstuff.View) {
 	if cs.lastVote < view {
 		cs.lastVote = view
@@ -126,11 +127,12 @@ func (cs *consensusBase) StopVoting(view hotstuff.View) {
 func (cs *consensusBase) Propose(cert hotstuff.SyncInfo) {
 	cs.logger.Debug("Propose")
 
-	// 获取当前highest QC（使用qc应该是hotstuff类共识特有的方法）
+	// 获取当前highest QC
 	qc, ok := cert.QC()
 	if ok {
 		// tell the acceptor that the previous proposal succeeded.
 		if qcBlock, ok := cs.blockChain.Get(qc.BlockHash()); ok {
+			// 在leader中更新上一个block中的消息
 			cs.acceptor.Proposed(qcBlock.Command())
 		} else {
 			cs.logger.Errorf("Could not find block for QC: %s", qc)
@@ -139,10 +141,15 @@ func (cs *consensusBase) Propose(cert hotstuff.SyncInfo) {
 
 	// 利用context获取交易输入？ 为什么是从同步器获取proposal的输入？不应该从replica的store获取吗？
 	cmd, ok := cs.commandQueue.Get(cs.synchronizer.ViewContext())
-	// cs.logger.Infof("commandQueue len: %d", len(cmd))
 	if !ok {
 		cs.logger.Debug("Propose: No command")
 		return
+	}
+
+	v := cs.synchronizer.View()
+	cs.logger.Infof("Propose View: %d \n", cs.synchronizer.View())
+	if v%100 == 0 {
+		cs.logger.Infof("Propose View: %d", cs.synchronizer.View())
 	}
 
 	var proposal hotstuff.ProposeMsg
@@ -214,17 +221,27 @@ func (cs *consensusBase) OnPropose(proposal hotstuff.ProposeMsg) { //nolint:gocy
 	}
 
 	// RapidFair: 增加verification流程verifyFairness
-	if !cs.VerifyFairness(proposal.Block) {
-		cs.logger.Info("OnPropose: Order not verified")
-		return
+	if cs.opts.UseFairOrder() {
+		if !cs.VerifyFairness(proposal.Block) {
+			cs.logger.Info("OnPropose: Order not verified")
+			return
+		}
 	}
 
-	if qcBlock, ok := cs.blockChain.Get(block.QuorumCert().BlockHash()); ok {
-		cs.acceptor.Proposed(qcBlock.Command())
-	} else {
-		cs.logger.Info("OnPropose: Failed to fetch qcBlock")
+	// 获取给定哈希值的block, Get 将尝试在本地找到该块。如果本地不可用，它将尝试fetch这个block
+	// qcBlock指向上一个区块，在OnPropose中replicas确定上一个block的交易已经被提交
+	// replica只用写入交易而不用从本地Get交易，但是也要更新已经提交的最高交易序号
+	// RapidFair: 公平排序时，需要在collect之前就确定之前区块中已经提交的所有交易
+	if !cs.opts.UseFairOrder() {
+		if qcBlock, ok := cs.blockChain.Get(block.QuorumCert().BlockHash()); ok {
+			// 在replica中更新上一个block已经提交的交易，这之后应该才能执行下一轮collect
+			cs.acceptor.Proposed(qcBlock.Command())
+		} else {
+			cs.logger.Info("OnPropose: Failed to fetch qcBlock")
+		}
 	}
 
+	// 验证当前提出的block中的tx是否能被接受
 	if !cs.acceptor.Accept(block.Command()) {
 		cs.logger.Info("OnPropose: command not accepted")
 		return
@@ -242,21 +259,26 @@ func (cs *consensusBase) OnPropose(proposal hotstuff.ProposeMsg) { //nolint:gocy
 			cs.commit(b)
 		}
 		if !didAdvanceView {
+			cs.logger.Debugf("[Onpropose]: Replica call advanceView() actively, lastvote view: %d", cs.lastVote)
 			cs.synchronizer.AdvanceView(hotstuff.NewSyncInfo().WithQC(block.QuorumCert()))
 		}
 	}()
 
+	// 如果proposal的block的view小于节点记录的上一个投票的view，则不会继续执行投票
 	if block.View() <= cs.lastVote {
-		cs.logger.Info("OnPropose: block view too old")
+		cs.logger.Infof("OnPropose: block view too old, block view: %d, current view: %d, lastVote view: %d", block.View(), cs.synchronizer.View(), cs.lastVote)
 		return
 	}
 
+	// propose-vote阶段，replica发送给leader的只有PartialCert(pc)，并不包含proposal
 	pc, err := cs.crypto.CreatePartialCert(block)
 	if err != nil {
 		cs.logger.Error("OnPropose: failed to sign block: ", err)
 		return
 	}
 
+	// cs.lastVote是一个consensus中全局维护的变量，表示上一个投票的view
+	// 仅在OnPropose()和stopVoting()中进行修改
 	cs.lastVote = block.View()
 	// 如果handel不为空，此时会推进view
 	if cs.handel != nil {
@@ -266,7 +288,8 @@ func (cs *consensusBase) OnPropose(proposal hotstuff.ProposeMsg) { //nolint:gocy
 		cs.handel.Begin(pc)
 		return
 	}
-	// 返回下一个view的leader， cs.lastVote + 1是当前view+1
+	// 重点！此时replica将vote发送给下一个view的leader来触发onVote()
+	// 这里返回下一个view的leader， cs.lastVote + 1是当前view+1
 	leaderID := cs.leaderRotation.GetLeader(cs.lastVote + 1)
 	if leaderID == cs.opts.ID() {
 		cs.eventLoop.AddEvent(hotstuff.VoteMsg{ID: cs.opts.ID(), PartialCert: pc})
@@ -289,6 +312,7 @@ func (cs *consensusBase) commit(block *hotstuff.Block) {
 	cs.mut.Unlock()
 
 	if err != nil {
+		cs.logger.Infof("failed to commit: %v", err)
 		cs.logger.Warnf("failed to commit: %v", err)
 		return
 	}
@@ -296,8 +320,16 @@ func (cs *consensusBase) commit(block *hotstuff.Block) {
 	// prune the blockchain and handle forked blocks
 	forkedBlocks := cs.blockChain.PruneToHeight(block.View())
 	for _, block := range forkedBlocks {
+		cs.logger.Infof("Commit: have forked blocks on view: %d", block.View())
 		cs.forkHandler.Fork(block)
 	}
+
+	// RapidFair: baseline
+	v := block.View()
+	if v%100 == 0 { // 每100个block打印一次
+		cs.logger.Infof("success to commit block(view): %d", block.View())
+	}
+
 }
 
 // recursive helper for commit
@@ -328,15 +360,15 @@ func (cs *consensusBase) ChainLength() int {
 // 新增FairPropose()方法，传入公平排序的txSeq参数，创建公平proposal
 // 除了获取交易序列的方式以外，其他不改变
 func (cs *consensusBase) FairPropose(cert hotstuff.SyncInfo, cmd hotstuff.Command, txSeq map[hotstuff.ID]hotstuff.Command) {
-	cs.logger.Debug("Propose")
+	v := cs.synchronizer.View()
+	cs.logger.Infof("FairPropose View: %d, Leader ID: %d\n", v, cs.opts.ID())
 
-	// 获取当前highest QC（使用qc应该是hotstuff类共识特有的方法）
+	// 获取当前highest QC，通知acceptor之前的proposal已经成功
 	qc, ok := cert.QC()
 	if ok {
 		// tell the acceptor that the previous proposal succeeded.
-		if qcBlock, ok := cs.blockChain.Get(qc.BlockHash()); ok {
-			cs.acceptor.Proposed(qcBlock.Command())
-		} else {
+		if _, ok := cs.blockChain.Get(qc.BlockHash()); !ok {
+			// cs.acceptor.Proposed(qcBlock.Command())
 			cs.logger.Errorf("Could not find block for QC: %s", qc)
 		}
 	}
@@ -375,30 +407,30 @@ func (cs *consensusBase) FairPropose(cert hotstuff.SyncInfo, cmd hotstuff.Comman
 
 // RapidFair: baseline
 func (cs *consensusBase) VerifyFairness(proposedBlock *hotstuff.Block) bool {
+	isFair := true
 	// replica执行公平排序算法验证command是否符合公平排序规则
 	proposedTxCmd := proposedBlock.Command()
+	unptc := cs.BatchUnmarshal(proposedTxCmd)
+	// 对genesis block额外处理，判断command是否为空，为空直接通过
+	if proposedBlock.View() == hotstuff.View(1) {
+		cs.logger.Infof("is genesis block")
+		return isFair
+	}
 	txSeqList := proposedBlock.TxSeq()
 	// 构建txList
-	txList := make([][]string, 0)
-	for _, txl := range txSeqList {
-		txs := make([]string, 0)
-		untxl := cs.BatchUnmarshal(txl)
-		for _, v := range untxl {
-			txs = append(txs, string(v.GetData()))
-		}
-		txList = append(txList, txs)
-	}
+	txList, _ := cs.collector.ConstructTxList(txSeqList)
+	// 公平排序
 	finalTxSeq := orderfairness.FairOrder_Themis(txList, cs.configuration.Len(), cs.opts.ThemisGamma())
-	// 反序列化proposedTxCmd
+
 	// 判断proposedTx顺序和finalTxSeq顺序是否一致
-	isFair := true
-	unptc := cs.BatchUnmarshal(proposedTxCmd)
 	if len(unptc) != len(finalTxSeq) { // 先判断下长度是否一致
 		isFair = false
 		return isFair
 	}
 	for i, v := range unptc {
-		if string(finalTxSeq[i]) != string(v.GetData()) {
+		// 计算proposal中的cmd的交易TxID
+		txId := hotstuff.NewTxID(v.GetClientID(), v.GetSequenceNumber())
+		if string(finalTxSeq[i]) != string(txId) {
 			isFair = false
 			return isFair
 		}
@@ -411,7 +443,7 @@ func (cs *consensusBase) BatchUnmarshal(cmd hotstuff.Command) []*clientpb.Comman
 	batch := new(clientpb.Batch)
 	err := cs.unmarshaler.Unmarshal([]byte(cmd), batch)
 	if err != nil {
-		cs.logger.Errorf("[CollectMachine-FairOrder]: Failed to unmarshal batch: %v", err)
+		cs.logger.Errorf("[Consensus-VerifyFairness]: Failed to unmarshal batch: %v", err)
 		return nil
 	}
 	return batch.GetCommands()

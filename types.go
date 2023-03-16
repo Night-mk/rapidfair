@@ -386,12 +386,13 @@ func writeParticipants(wr io.Writer, participants IDSet) (err error) {
 
 // RapidFair: 在types里增加CollectTxSeq类型，并增加方法
 type CollectTxSeq struct {
-	view  View
-	txSeq Command
+	view     View
+	txSeq    Command
+	syncInfo SyncInfo // 记录qc同步消息
 }
 
-func NewCollectTxSeq(v View, txSeq Command) CollectTxSeq {
-	return CollectTxSeq{v, txSeq}
+func NewCollectTxSeq(v View, txSeq Command, syncInfo SyncInfo) CollectTxSeq {
+	return CollectTxSeq{v, txSeq, syncInfo}
 }
 
 func (col CollectTxSeq) View() View {
@@ -400,6 +401,37 @@ func (col CollectTxSeq) View() View {
 
 func (col CollectTxSeq) TxSeq() Command {
 	return col.txSeq
+}
+
+func (col CollectTxSeq) SyncInfo() SyncInfo {
+	return col.syncInfo
+}
+
+// 增加ReadyCollect类型的消息
+type ReadyCollect struct {
+	view     View
+	syncInfo SyncInfo
+}
+
+func NewReadyCollect(v View, syncInfo SyncInfo) ReadyCollect {
+	return ReadyCollect{v, syncInfo}
+}
+
+func (rc ReadyCollect) View() View {
+	return rc.view
+}
+
+func (rc ReadyCollect) SyncInfo() SyncInfo {
+	return rc.syncInfo
+}
+
+// TxId is a unique identifier for a Tx
+type TxID string
+
+// 定义创建TxID的方法，使用clientID和sequenceNum唯一确定交易
+// "tx"+clientID+","+SequenceNumber作为交易的唯一id
+func NewTxID(clientID uint32, sequenceNum uint64) TxID {
+	return TxID("tx" + strconv.Itoa(int(clientID)) + "+" + strconv.Itoa(int(sequenceNum)))
 }
 
 // RapidFair END

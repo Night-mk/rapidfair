@@ -34,6 +34,7 @@ func (hs *ChainedHotStuff) InitModule(mods *modules.Core) {
 	mods.Get(&hs.blockChain, &hs.logger)
 }
 
+// 输入qc，获取对应的block（qc->blockhash->block）
 func (hs *ChainedHotStuff) qcRef(qc hotstuff.QuorumCert) (*hotstuff.Block, bool) {
 	if (hotstuff.Hash{}) == qc.BlockHash() {
 		return nil, false
@@ -85,12 +86,12 @@ func (hs *ChainedHotStuff) VoteRule(proposal hotstuff.ProposeMsg) bool {
 	if haveQCBlock && qcBlock.View() > hs.bLock.View() {
 		safe = true
 	} else {
-		hs.logger.Debug("OnPropose: liveness condition failed")
+		hs.logger.Debug("====================OnPropose: liveness condition failed")
 		// check if this block extends bLock
 		if hs.blockChain.Extends(block, hs.bLock) {
 			safe = true
 		} else {
-			hs.logger.Debug("OnPropose: safety condition failed")
+			hs.logger.Debug("====================OnPropose: safety condition failed")
 		}
 	}
 

@@ -76,6 +76,7 @@ func (r *Reader) read(b []byte) error {
 		return fmt.Errorf("failed to unmarshal Any message: %w", err)
 	}
 
+	// 在每个plotter中增加反序列化之后的消息
 	for _, p := range r.plotters {
 		p.Add(msg)
 	}

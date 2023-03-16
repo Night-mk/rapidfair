@@ -17,15 +17,44 @@ service Hotstuff {
     option (gorums.unicast) = true;
   }
 
+  // 超时使用广播？
   rpc Timeout(TimeoutMsg) returns (google.protobuf.Empty) {
     option (gorums.multicast) = true;
   }
-
+  // newview使用单播
   rpc NewView(SyncInfo) returns (google.protobuf.Empty) {
     option (gorums.unicast) = true;
   }
 
   rpc Fetch(BlockHash) returns (Block) { option (gorums.quorumcall) = true; }
+
+  // RapidFair: baseline
+  // 增加collect阶段，replica发送tx seq给当前leader
+  rpc Collect(CollectTxSeq) returns (CollectTxSeq) {
+      option (gorums.unicast) = true; // 单播是replica给当前leader节点发消息
+  }
+
+  // 增加readyCollect阶段，leader需要广播ReadyCollectMsg，通知replicas可以开始发送collect消息给当前leader
+  rpc ReadyCollect(ReadyCollectMsg) returns (google.protobuf.Empty) {
+    option (gorums.multicast) = true;
+  }
+
+  // baseline中Collect阶段用quorumcall会快吗？
+}
+
+// RapidFair: baseline
+// 收集交易序列的消息
+message CollectTxSeq {
+  // uint32 ReplicaId = 1; // replica ID
+  uint64 View = 1; // collect阶段对应的view，leader收到消息后如果发现该view的消息已经发过，则不会处理重复的消息
+  bytes TxSeq = 2; // 交易序列数组进行序列化变为byte
+  SyncInfo SyncInfo = 3; // 给collect消息增加同步信息
+}
+
+// 通知可以开始收集交易序列的消息
+message ReadyCollectMsg{
+  uint64 View = 1;
+  SyncInfo SyncInfo = 2;
 }
 
 message Proposal {

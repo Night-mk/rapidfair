@@ -77,4 +77,10 @@ func (col CollectMsg) String() string {
 	return fmt.Sprintf("ID: %d, View: %d, TxSeqLen: %d", col.ID, v, len(txSeq))
 }
 
+// 增加ReadyCollectMsg类型的消息，leader广播通知replica节点能发送collect给当前leader
+type ReadyCollectMsg struct {
+	ID           ID
+	ReadyCollect ReadyCollect
+}
+
 // RapidFair END

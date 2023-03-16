@@ -90,7 +90,7 @@ func (e *Experiment) Run() (err error) {
 	if err != nil {
 		return fmt.Errorf("failed to start clients: %w", err)
 	}
-
+	// 直接在这里sleep一个experiment总时长，之后就直接stop
 	time.Sleep(e.Duration)
 
 	e.Logger.Info("Stopping clients...")

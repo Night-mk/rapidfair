@@ -11,6 +11,7 @@ import (
 )
 
 // RemoteWorker is a proxy for a remote worker.
+// 远程worker的代理
 type RemoteWorker struct {
 	send *protostream.Writer
 	recv *protostream.Reader

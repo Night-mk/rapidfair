@@ -83,6 +83,7 @@ func (srv *clientSrv) ExecCommand(ctx gorums.ServerCtx, cmd *clientpb.Command) (
 	srv.mut.Unlock()
 
 	srv.cmdCache.addCommand(cmd) // 使用cmdCache接收发送到的tx
+	// srv.logger.Infof("receive cmd here")
 	ctx.Release()
 	err := <-c
 	return &emptypb.Empty{}, err

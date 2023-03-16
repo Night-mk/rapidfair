@@ -35,6 +35,7 @@ func GonumPlot(filename, xlabel, ylabel string, f func(plt *plot.Plot) error) er
 		return err
 	}
 
+	fmt.Println("save plot img: ", filename)
 	if err := plt.Save(6*vg.Inch, 6*vg.Inch, filename); err != nil {
 		return fmt.Errorf("failed to save plot: %w", err)
 	}
@@ -44,6 +45,7 @@ func GonumPlot(filename, xlabel, ylabel string, f func(plt *plot.Plot) error) er
 
 // MeasurementMap is a map that stores lists Measurement objects associated
 // with the ID of the client/replica where they where taken.
+// map(ID -> Measurement), Measurement是一个interface
 type MeasurementMap struct {
 	m map[uint32][]Measurement
 }
@@ -71,6 +73,13 @@ func (m *MeasurementMap) NumIDs() int {
 
 // Measurement is an object with a types.Event getter.
 type Measurement interface {
+	// Event是./metrics/types/types.proto定义的一个消息类型，返回Replica/client事件的时间戳
+	/*
+		message Event {
+			uint32 ID = 1;
+			bool Client = 2;
+			google.protobuf.Timestamp Timestamp = 3;
+		}*/
 	GetEvent() *types.Event
 }
 
@@ -125,16 +134,27 @@ func GroupByTimeInterval(startTimes *StartTimes, m MeasurementMap, interval time
 // TimeAndAverage returns a struct that yields (x, y) points where x is the time,
 // and y is the average value of each group. The getValue function must return the
 // value and sample count for the given measurement.
+// RapidFair: baseline 可以从这里获取tps/latency的均值
+// 输入：groups表示tps/latency的结果json进行序列化成对象MeasurementGroup之后的数据
+/*
+type MeasurementGroup struct {
+	Time         time.Duration // The beginning of the time interval
+	Measurements []Measurement
+}*/
 func TimeAndAverage(groups []MeasurementGroup, getValue func(Measurement) (float64, uint64)) plotter.XYer {
 	points := make(xyer, 0, len(groups))
-	for _, group := range groups {
+	// 计算tps/latency所有数据的均值
+	var allavg float64
+	finavg := float64(0)
+	for _, group := range groups { // 每个group计算一次x,y顶点的值,总共len(group)组顶点
 		var (
 			sum float64
 			num uint64
 		)
 		for _, measurement := range group.Measurements {
+			// throughput调用次方法时，v表tps=command/duration, n是数量（每个replica节点的数据代表1）
 			v, n := getValue(measurement)
-			sum += v * float64(n)
+			sum += v * float64(n) // sum表示累积的command，latency总和
 			num += n
 		}
 		if num > 0 {
@@ -142,8 +162,23 @@ func TimeAndAverage(groups []MeasurementGroup, getValue func(Measurement) (float
 				x: group.Time.Seconds(),
 				y: sum / float64(num),
 			})
+			allavg += sum / float64(num)
 		}
 	}
+	// RapidFair 新增：计算所有type的measurement数据的均值（只有tps和latency）
+	if len(groups) > 0 {
+		finavg = allavg / float64(len(groups))
+		if len(groups[0].Measurements) > 0 {
+			m := groups[0].Measurements[0]
+			switch m.(type) {
+			case *types.LatencyMeasurement:
+				fmt.Printf("avg latency: %.4f ms\n", finavg)
+			case *types.ThroughputMeasurement:
+				fmt.Printf("avg tps: %.4f tx/s\n", finavg)
+			}
+		}
+	}
+
 	return points
 }
 

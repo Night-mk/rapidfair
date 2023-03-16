@@ -36,7 +36,7 @@ func (p *ThroughputVSLatencyPlot) Add(measurement any) {
 
 	id := m.GetEvent().GetID()
 
-	switch measurement.(type) {
+	switch measurement.(type) { // 类型断言，使用xx.(type)可以获得该变量的类型
 	case *types.LatencyMeasurement:
 		if !m.GetEvent().GetClient() {
 			// ignore replica latency

@@ -43,20 +43,20 @@ using the '--host' parameter. This should be a comma separated list of hostnames
 }
 
 func init() {
-	rootCmd.AddCommand(runCmd)
+	rootCmd.AddCommand(runCmd) // 使用root.go中的rootCmd变量增加命令runCmd
 
 	runCmd.Flags().Int("replicas", 4, "number of replicas to run")
 	runCmd.Flags().Int("clients", 1, "number of clients to run")
 	runCmd.Flags().Int("batch-size", 1, "number of commands to batch together in each block")
-	runCmd.Flags().Int("payload-size", 0, "size in bytes of the command payload")
+	runCmd.Flags().Int("payload-size", 0, "size in bytes of the command payload") // tx的bytes大小
 	runCmd.Flags().Int("max-concurrent", 4, "maximum number of conccurrent commands per client")
 	runCmd.Flags().Duration("client-timeout", 500*time.Millisecond, "Client timeout.")
 	runCmd.Flags().Duration("duration", 10*time.Second, "duration of the experiment")
 	runCmd.Flags().Duration("connect-timeout", 5*time.Second, "duration of the initial connection timeout")
 	runCmd.Flags().Duration("view-timeout", 100*time.Millisecond, "duration of the first view")
 	runCmd.Flags().Duration("max-timeout", 0, "upper limit on view timeouts")
-	runCmd.Flags().Int("duration-samples", 1000, "number of previous views to consider when predicting view duration")
-	runCmd.Flags().Float32("timeout-multiplier", 1.2, "number to multiply the view duration by in case of a timeout")
+	runCmd.Flags().Int("duration-samples", 1000, "number of previous views to consider when predicting view duration") // 使用前1000个区块的duration来近似计算新view-duration
+	runCmd.Flags().Float32("timeout-multiplier", 1.2, "number to multiply the view duration by in case of a timeout")  // 出现超时情况时，view间隔时间增长倍数
 	runCmd.Flags().String("consensus", "chainedhotstuff", "name of the consensus implementation")
 	runCmd.Flags().String("crypto", "ecdsa", "name of the crypto implementation")
 	runCmd.Flags().String("leader-rotation", "round-robin", "name of the leader rotation algorithm")
@@ -97,9 +97,9 @@ func init() {
 
 func runController() {
 	var err error
-	outputDir := ""
+	outputDir := "" // metric的输出目录
 	if output := viper.GetString("output"); output != "" {
-		outputDir, err = filepath.Abs(output)
+		outputDir, err = filepath.Abs(output) // 返回一个绝对路径，加入当前工作目录中
 		checkf("failed to get absolute path: %v", err)
 		err = os.MkdirAll(outputDir, 0755)
 		checkf("failed to create output directory: %v", err)

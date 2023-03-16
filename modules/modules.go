@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/relab/hotstuff"
+	"github.com/relab/hotstuff/internal/proto/clientpb"
 )
 
 // Module interfaces
@@ -21,7 +22,7 @@ type CommandQueue interface {
 	GetTxBatch(ctx context.Context) (cmd hotstuff.Command, ok bool)
 
 	// RapidFair: baseline 获取当前最高提交的交易序列号
-	GetHighProposedSeqNum() uint64
+	// GetHighProposedSeqNum() uint64
 }
 
 //go:generate mockgen -destination=../internal/mocks/acceptor_mock.go -package=mocks . Acceptor
@@ -131,6 +132,10 @@ type Configuration interface {
 	Fetch(ctx context.Context, hash hotstuff.Hash) (block *hotstuff.Block, ok bool)
 	// SubConfig returns a subconfiguration containing the replicas specified in the ids slice.
 	SubConfig(ids []hotstuff.ID) (sub Configuration, err error)
+	// RapidFair: 接口中增加ReadyCollect方法，在./backend/config.go中实现
+	ReadyCollect(rc hotstuff.ReadyCollectMsg)
+	// RapidFair: 返回公平排序定义下的quorumsize
+	QuorumSizeFair() int
 }
 
 //go:generate mockgen -destination=../internal/mocks/consensus_mock.go -package=mocks . Consensus
@@ -223,8 +228,10 @@ func (fhw forkHandlerWrapper) Fork(block *hotstuff.Block) {
 // RapidFair: baseline 增加collect模块
 // Collector实现交易序列收集协议
 type Collector interface {
-	// 收集方法
+	// replica发送交易序列给leader
 	Collect(syncInfo hotstuff.SyncInfo)
-	// 构建txList的方法
-	// ConstructTxList(txSeq map[hotstuff.ID]hotstuff.Command) ([][]string, map[string]uint32)
+	// 公开构建txList的方法
+	ConstructTxList(txSeq map[hotstuff.ID]hotstuff.Command) ([][]string, map[string]*clientpb.Command)
+	// leader广播能进行collect的消息给所有replicas
+	ReadyCollect(syncInfo hotstuff.SyncInfo)
 }

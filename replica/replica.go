@@ -73,7 +73,7 @@ func New(conf Config, builder modules.Builder) (replica *Replica) {
 
 	srv := &Replica{
 		clientSrv:    clientSrv,
-		execHandlers: make(map[cmdID]func(*emptypb.Empty, error)),
+		execHandlers: make(map[cmdID]func(*emptypb.Empty, error)), // 这个参数就初始化用了？
 		cancel:       func() {},
 		done:         make(chan struct{}),
 	}
@@ -99,6 +99,7 @@ func New(conf Config, builder modules.Builder) (replica *Replica) {
 			Certificates: []tls.Certificate{*conf.Certificate},
 		})
 	}
+	// 初始化backend config
 	srv.cfg = backend.NewConfig(creds, managerOpts...)
 
 	builder.Add(

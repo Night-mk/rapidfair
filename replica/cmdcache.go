@@ -17,6 +17,7 @@ import (
 // 实现了CommandQueue接口
 type cmdCache struct {
 	logger logging.Logger
+	opts   *modules.Options // RapidFair: 控制使用公平排序
 
 	mut           sync.Mutex
 	c             chan struct{}
@@ -26,8 +27,9 @@ type cmdCache struct {
 	marshaler     proto.MarshalOptions
 	unmarshaler   proto.UnmarshalOptions
 
-	proposedCache     map[uint32]map[uint64]int // RapidFair:baseline 存储对所有已提交交易的缓存（无序）
-	currentBatchCache []*clientpb.Command       // RapidFair:baseline 存储对当前读取的所有txBatch的缓存
+	proposedCache     map[hotstuff.TxID]int               // RapidFair:baseline 存储对所有已提交交易的缓存（无序）
+	currentBatchCache map[hotstuff.TxID]*clientpb.Command // RapidFair:baseline 存储对当前读取的所有txBatch的缓存
+	currentBatchTxId  []hotstuff.TxID                     // 按顺序存储加入到txBatch的交易
 }
 
 func newCmdCache(batchSize int) *cmdCache {
@@ -35,8 +37,9 @@ func newCmdCache(batchSize int) *cmdCache {
 		c:                 make(chan struct{}),
 		batchSize:         batchSize,
 		serialNumbers:     make(map[uint32]uint64),
-		proposedCache:     make(map[uint32]map[uint64]int),
-		currentBatchCache: make([]*clientpb.Command, batchSize),
+		proposedCache:     make(map[hotstuff.TxID]int),
+		currentBatchCache: make(map[hotstuff.TxID]*clientpb.Command),
+		currentBatchTxId:  make([]hotstuff.TxID, 0),
 		marshaler:         proto.MarshalOptions{Deterministic: true},
 		unmarshaler:       proto.UnmarshalOptions{DiscardUnknown: true},
 	}
@@ -44,12 +47,18 @@ func newCmdCache(batchSize int) *cmdCache {
 
 // InitModule gives the module access to the other modules.
 func (c *cmdCache) InitModule(mods *modules.Core) {
-	mods.Get(&c.logger)
+	mods.Get(
+		&c.logger,
+		&c.opts,
+	)
 }
 
+// 向cmdcache增加从client接收到的tx
+// 判断client发来的交易序列号是否小于已经提交的交易的序列号（正常情况下一定是大于的，即cmd.GetSequenceNumber()>proposed serialNo）
 func (c *cmdCache) addCommand(cmd *clientpb.Command) {
 	c.mut.Lock()
 	defer c.mut.Unlock()
+	// 判断client发来的tx的序列号是否小于该client已经提交的最高的交易序列号
 	if serialNo := c.serialNumbers[cmd.GetClientID()]; serialNo >= cmd.GetSequenceNumber() {
 		// command is too old
 		return
@@ -96,7 +105,8 @@ awaitBatch:
 	// Get the batch. Note that we may not be able to fill the batch, but that should be fine as long as we can send
 	// at least one command.
 	// c.cache是一个list，这里的读取方式是读一个删一个，在addCommand中直接增加tx
-	for i := 0; i < c.batchSize; i++ {
+	// for i := 0; i < c.batchSize; i++ {
+	for i := 0; i < c.batchSize-len(batch.Commands); i++ {
 		elem := c.cache.Front()
 		if elem == nil {
 			break
@@ -115,9 +125,15 @@ awaitBatch:
 
 	// if we still got no (new) commands, try to wait again
 	// 如果没有command则会再去等待
-	if len(batch.Commands) == 0 {
+	// if len(batch.Commands) == 0 {
+	// 	goto awaitBatch
+	// }
+	// hotstuff baseline修改，让每个block都保证至少batchsize大小
+	if len(batch.Commands) < c.batchSize {
 		goto awaitBatch
 	}
+	// c.logger.Infof("Setted BatchSize: %d", c.batchSize)
+	// c.logger.Infof("BatchSize of get: %d", len(batch.Commands))
 
 	defer c.mut.Unlock()
 
@@ -136,6 +152,7 @@ awaitBatch:
 // RapidFair: baseline 设计新的交易读取方法GetTxBatch()
 // 使得在获取batchtx进行collect的时候不会从cache中删除，只有收到proposal并通过后才从cache里删除
 func (c *cmdCache) GetTxBatch(ctx context.Context) (cmd hotstuff.Command, ok bool) {
+	// 使用new对clientpb.Batch进行实例化
 	batch := new(clientpb.Batch)
 	c.mut.Lock()
 awaitBatch:
@@ -152,7 +169,7 @@ awaitBatch:
 	}
 
 	// Get the batch. Note that we may not be able to fill the batch, but that should be fine as long as we can send at least one command.
-	// c.cache是一个list，这里只读但是不删除，在addCommand中直接增加tx
+	// c.cache是一个list，在addCommand中接收client发来的tx
 	// 这个方法中必须持续读取batchsize长度的交易序列
 	for i := 0; i < c.batchSize-len(batch.Commands); i++ {
 		elem := c.cache.Front()
@@ -166,13 +183,16 @@ awaitBatch:
 			uint64 SequenceNumber = 2;
 			bytes Data = 3;
 		}*/
+		// 计算交易的TxID
 		// 判断cmd的seqnum是否已经提交，如果已经提交，则不会加入这个交易进入batch
-		if _, ok := c.proposedCache[cmd.GetClientID()][cmd.GetSequenceNumber()]; ok {
+		txId := hotstuff.NewTxID(cmd.GetClientID(), cmd.GetSequenceNumber())
+		if _, ok := c.proposedCache[txId]; ok {
 			i--
 			continue
 		}
 		batch.Commands = append(batch.Commands, cmd)
-		c.currentBatchCache = append(c.currentBatchCache, cmd)
+		c.currentBatchCache[txId] = cmd
+		c.currentBatchTxId = append(c.currentBatchTxId, txId) // 记录txId的交易的索引
 	}
 
 	// if we still got no (new) commands, try to wait again
@@ -180,6 +200,7 @@ awaitBatch:
 	if len(batch.Commands) < c.batchSize {
 		goto awaitBatch
 	}
+	// c.logger.Infof("[GetTxBatch]: BatchSize of get: %d", len(batch.Commands))
 
 	defer c.mut.Unlock()
 
@@ -195,7 +216,9 @@ awaitBatch:
 	return cmd, true
 }
 
-// Accept returns true if the replica can accept the batch.
+// Accept returns true if the replica can accept the batch. 只在onPropose中调用
+// 判断replica是否会接受提出的block中的交易，一般block中cmd的序列号要大于client已经提交的最高序列号(serialNumbers[clientID])
+// RapidFair问题就在这里：
 func (c *cmdCache) Accept(cmd hotstuff.Command) bool {
 	batch := new(clientpb.Batch)
 	err := c.unmarshaler.Unmarshal([]byte(cmd), batch)
@@ -207,10 +230,14 @@ func (c *cmdCache) Accept(cmd hotstuff.Command) bool {
 	c.mut.Lock()
 	defer c.mut.Unlock()
 
-	for _, cmd := range batch.GetCommands() {
-		if serialNo := c.serialNumbers[cmd.GetClientID()]; serialNo >= cmd.GetSequenceNumber() {
-			// command is too old, can't accept
-			return false
+	// RapidFair: baseline 原本hotstuff这里判断序列号可能存在问题，因为可能存在一些低序列号的交易无法在当前block提交，并延后到下一个或几个block中才能提交
+	// RapidFair: baseline 公平排序里暂时先放弃判断
+	if !c.opts.UseFairOrder() {
+		for _, cmd := range batch.GetCommands() {
+			if serialNo := c.serialNumbers[cmd.GetClientID()]; serialNo >= cmd.GetSequenceNumber() {
+				// command is too old, can't accept
+				return false
+			}
 		}
 	}
 
@@ -219,7 +246,9 @@ func (c *cmdCache) Accept(cmd hotstuff.Command) bool {
 
 // Proposed updates the serial numbers such that we will not accept the given batch again.
 // RapidFair: baseline 修改对proposed交易缓存的修改
+// hotstuff: 输入已经提出的block的交易序列，更新client提交的最高交易序列号
 func (c *cmdCache) Proposed(cmd hotstuff.Command) {
+	// c.logger.Infof("==============call cmdcahe proposed()==============")
 	batch := new(clientpb.Batch)
 	err := c.unmarshaler.Unmarshal([]byte(cmd), batch)
 	if err != nil {
@@ -232,38 +261,33 @@ func (c *cmdCache) Proposed(cmd hotstuff.Command) {
 
 	for _, cmd := range batch.GetCommands() {
 		// RapidFair: baseline 将已提交的tx序列号保存在cmdcache本地
-		if c.proposedCache[cmd.GetClientID()] == nil {
-			c.proposedCache[cmd.GetClientID()] = make(map[uint64]int)
-		}
-		c.proposedCache[cmd.GetClientID()][cmd.GetSequenceNumber()] = 1
+		// 在构造block的时候没有重构交易的SequenceNumber
+		txId := hotstuff.NewTxID(cmd.GetClientID(), cmd.GetSequenceNumber())
+		c.proposedCache[txId] = 1
+		// 从currentBatchCache中删除已经提交的交易
+		delete(c.currentBatchCache, txId)
+		// RapidFair END
 
+		// 记录每个client提出的并且包含在proposal中的交易(cmd)的最高序列号
 		if serialNo := c.serialNumbers[cmd.GetClientID()]; serialNo < cmd.GetSequenceNumber() {
 			c.serialNumbers[cmd.GetClientID()] = cmd.GetSequenceNumber()
 		}
 	}
 
 	// RapidFair: baseline 将没有提交成功的交易应该按顺序再放回c.cache
-	// currentBatchCache >= proposal
-	var remainedTx []*clientpb.Command
-	for _, v := range c.currentBatchCache {
-		if _, ok := c.proposedCache[v.GetClientID()][v.GetSequenceNumber()]; !ok {
-			remainedTx = append(remainedTx, v)
+	if len(c.currentBatchCache) > 0 {
+		c.logger.Infof("==============Need reinput the transactions==============")
+		// 对在batch中但是没有在block.data中的交易，按从后往前的顺序从前面加入回cache中
+		for i := len(c.currentBatchTxId) - 1; i >= 0; i-- {
+			if _, ok := c.currentBatchCache[c.currentBatchTxId[i]]; ok {
+				c.cache.PushFront(c.currentBatchCache[c.currentBatchTxId[i]])
+			}
 		}
+		// 重置currentBatchCache
+		c.currentBatchCache = make(map[hotstuff.TxID]*clientpb.Command, 0)
+		c.currentBatchTxId = make([]hotstuff.TxID, 0)
 	}
-	if len(remainedTx) > 0 {
-		for i := len(remainedTx) - 1; i >= 0; i-- {
-			c.cache.PushFront(remainedTx[i])
-		}
-	}
-}
-
-// RapidFair: baseline 获取当前最高的交易序列号
-func (c *cmdCache) GetHighProposedSeqNum() uint64 {
-	highSeqNum := 0
-	for _, v := range c.proposedCache {
-		highSeqNum += len(v)
-	}
-	return uint64(highSeqNum)
+	// RapidFair END
 }
 
 var _ modules.Acceptor = (*cmdCache)(nil)

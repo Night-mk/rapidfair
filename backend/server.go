@@ -18,8 +18,6 @@ import (
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/peer"
 	"google.golang.org/grpc/status"
-
-	"github.com/relab/hotstuff/internal/proto/fairorderpb"
 )
 
 // Server is the Server-side of the gorums backend.
@@ -164,6 +162,7 @@ func (impl *serviceImpl) Vote(ctx gorums.ServerCtx, cert *hotstuffpb.PartialCert
 }
 
 // NewView handles the leader's response to receiving a NewView rpc from a replica.
+// leader从replica接收 NewView rpc 的响应处理，这样leader本地会继续执行OnNewView()方法吗？
 func (impl *serviceImpl) NewView(ctx gorums.ServerCtx, msg *hotstuffpb.SyncInfo) {
 	id, err := GetPeerIDFromContext(ctx, impl.srv.configuration)
 	if err != nil {
@@ -208,7 +207,7 @@ type replicaConnected struct {
 }
 
 // RapidFair: Collect处理远程replica节点输入的proto collect消息
-func (impl *serviceImpl) Collect(ctx gorums.ServerCtx, col *fairorderpb.CollectTxSeq) {
+func (impl *serviceImpl) Collect(ctx gorums.ServerCtx, col *hotstuffpb.CollectTxSeq) {
 	// 从context中获取发送消息的replica的ID
 	id, err := GetPeerIDFromContext(ctx, impl.srv.configuration)
 	if err != nil {
@@ -219,6 +218,21 @@ func (impl *serviceImpl) Collect(ctx gorums.ServerCtx, col *fairorderpb.CollectT
 	// 将构建的collectMsg传输给eventLoop处理， AddEvent主要是增加事件
 	impl.srv.eventLoop.AddEvent(hotstuff.CollectMsg{
 		ID:           id,
-		CollectTxSeq: fairorderpb.TxSeqFromProto(col),
+		CollectTxSeq: hotstuffpb.CollectFromProto(col),
 	})
+}
+
+// ReadyCollect处理leader节点输入的proto <ReadyCollectMsg>消息
+func (impl *serviceImpl) ReadyCollect(ctx gorums.ServerCtx, rc *hotstuffpb.ReadyCollectMsg) {
+	// 从context中获取发送消息的replica的ID
+	var err error
+	rcMsg := hotstuffpb.ReadyCollectMsgFromProto(rc)
+	rcMsg.ID, err = GetPeerIDFromContext(ctx, impl.srv.configuration)
+	if err != nil {
+		impl.srv.logger.Infof("Failed to get client ID: %v", err)
+		return
+	}
+
+	// AddEvent增加事件ReadyCollectMsg传输给eventLoop处理
+	impl.srv.eventLoop.AddEvent(rcMsg)
 }

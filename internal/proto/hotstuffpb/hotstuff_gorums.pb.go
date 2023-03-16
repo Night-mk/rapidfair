@@ -162,12 +162,24 @@ func (c *Configuration) Propose(ctx context.Context, in *Proposal, opts ...gorum
 // Reference imports to suppress errors if they are not otherwise used.
 var _ emptypb.Empty
 
-// Timeout is a quorum call invoked on all nodes in configuration c,
-// with the same argument in, and returns a combined result.
+// 超时使用广播？
 func (c *Configuration) Timeout(ctx context.Context, in *TimeoutMsg, opts ...gorums.CallOption) {
 	cd := gorums.QuorumCallData{
 		Message: in,
 		Method:  "hotstuffpb.Hotstuff.Timeout",
+	}
+
+	c.RawConfiguration.Multicast(ctx, cd, opts...)
+}
+
+// Reference imports to suppress errors if they are not otherwise used.
+var _ emptypb.Empty
+
+// 增加readyCollect阶段，leader需要广播ReadyCollectMsg，通知replicas可以开始发送collect消息给当前leader
+func (c *Configuration) ReadyCollect(ctx context.Context, in *ReadyCollectMsg, opts ...gorums.CallOption) {
+	cd := gorums.QuorumCallData{
+		Message: in,
+		Method:  "hotstuffpb.Hotstuff.ReadyCollect",
 	}
 
 	c.RawConfiguration.Multicast(ctx, cd, opts...)
@@ -214,6 +226,8 @@ type Hotstuff interface {
 	Timeout(ctx gorums.ServerCtx, request *TimeoutMsg)
 	NewView(ctx gorums.ServerCtx, request *SyncInfo)
 	Fetch(ctx gorums.ServerCtx, request *BlockHash) (response *Block, err error)
+	Collect(ctx gorums.ServerCtx, request *CollectTxSeq)
+	ReadyCollect(ctx gorums.ServerCtx, request *ReadyCollectMsg)
 }
 
 func RegisterHotstuffServer(srv *gorums.Server, impl Hotstuff) {
@@ -243,6 +257,16 @@ func RegisterHotstuffServer(srv *gorums.Server, impl Hotstuff) {
 		resp, err := impl.Fetch(ctx, req)
 		gorums.SendMessage(ctx, finished, gorums.WrapMessage(in.Metadata, resp, err))
 	})
+	srv.RegisterHandler("hotstuffpb.Hotstuff.Collect", func(ctx gorums.ServerCtx, in *gorums.Message, _ chan<- *gorums.Message) {
+		req := in.Message.(*CollectTxSeq)
+		defer ctx.Release()
+		impl.Collect(ctx, req)
+	})
+	srv.RegisterHandler("hotstuffpb.Hotstuff.ReadyCollect", func(ctx gorums.ServerCtx, in *gorums.Message, _ chan<- *gorums.Message) {
+		req := in.Message.(*ReadyCollectMsg)
+		defer ctx.Release()
+		impl.ReadyCollect(ctx, req)
+	})
 }
 
 type internalBlock struct {
@@ -268,12 +292,22 @@ func (n *Node) Vote(ctx context.Context, in *PartialCert, opts ...gorums.CallOpt
 // Reference imports to suppress errors if they are not otherwise used.
 var _ emptypb.Empty
 
-// NewView is a quorum call invoked on all nodes in configuration c,
-// with the same argument in, and returns a combined result.
+// newview使用单播
 func (n *Node) NewView(ctx context.Context, in *SyncInfo, opts ...gorums.CallOption) {
 	cd := gorums.CallData{
 		Message: in,
 		Method:  "hotstuffpb.Hotstuff.NewView",
+	}
+
+	n.RawNode.Unicast(ctx, cd, opts...)
+}
+
+// RapidFair: baseline
+// 增加collect阶段，replica发送tx seq给当前leader
+func (n *Node) Collect(ctx context.Context, in *CollectTxSeq, opts ...gorums.CallOption) {
+	cd := gorums.CallData{
+		Message: in,
+		Method:  "hotstuffpb.Hotstuff.Collect",
 	}
 
 	n.RawNode.Unicast(ctx, cd, opts...)

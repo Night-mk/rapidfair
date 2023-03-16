@@ -75,6 +75,7 @@ func (chain *blockChain) LocalGet(hash hotstuff.Hash) (*hotstuff.Block, bool) {
 
 // Get retrieves a block given its hash. Get will try to find the block locally.
 // If it is not available locally, it will try to fetch the block.
+// 首先在本地查找block，如果本地找不到，则尝试fetch the block
 func (chain *blockChain) Get(hash hotstuff.Hash) (block *hotstuff.Block, ok bool) {
 	// need to declare vars early, or else we won't be able to use goto
 	var (

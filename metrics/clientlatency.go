@@ -38,6 +38,7 @@ func (lr *ClientLatency) InitModule(mods *modules.Core) {
 		&logger,
 	)
 
+	// 这里接收到交易的延迟数据，并存储在ClientLatency.wf中，并计算均值、方差等
 	eventLoop.RegisterHandler(client.LatencyMeasurementEvent{}, func(event any) {
 		latencyEvent := event.(client.LatencyMeasurementEvent)
 		lr.addLatency(latencyEvent.Latency)
@@ -52,7 +53,8 @@ func (lr *ClientLatency) InitModule(mods *modules.Core) {
 
 // AddLatency adds a latency data point to the current measurement.
 func (lr *ClientLatency) addLatency(latency time.Duration) {
-	millis := float64(latency) / float64(time.Millisecond)
+	// 将交易发送到接收时间的间隔的latency，单位转换为ms
+	millis := float64(latency) / float64(time.Millisecond) // 时间单位是毫秒
 	lr.wf.Update(millis)
 }
 

@@ -27,3 +27,9 @@ message Command {
 
 // Batch is a list of commands to be executed
 message Batch { repeated Command Commands = 1; }
+
+// RapidFair:baseline 增加map{id: Batch}的结构
+// bytes其实是Command的byte类型
+message MapBatch {
+  map<uint32,bytes> MapTxSeq = 1;
+}

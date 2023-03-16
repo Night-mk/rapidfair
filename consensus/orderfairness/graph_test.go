@@ -64,11 +64,11 @@ func TestGraph(t *testing.T) {
 
 var U int = 1
 var R int = 1
-var TxNum int = 100   // 50, 100, 200, 400
+var TxNum int = 50    // 50, 100, 200, 400
 var NodeNum int = 5   // 5, 6, 9, 21, 41
 var Gamma float32 = 1 // 1, 0.9, 0.75, 0.6, 0.55
 // var Fault int = 3
-var Rounds int = 10
+var Rounds int = 2
 
 // 测试公平排序交易序列
 func TestOrderFairness(t *testing.T) {
@@ -85,8 +85,7 @@ func TestOrderFairness(t *testing.T) {
 		// fmt.Println(quorumNodeNum)
 		st := NewSimTxData(TxNum, quorumNodeNum)
 		txList, sendTxSeq := st.GenSimTxData(U, R)
-		// fmt.Println("txList: ")
-		// fmt.Println(txList)
+		// fmt.Println("txList: ", txList)
 		fmt.Println("sendTxSeq len: ", len(sendTxSeq))
 		// fmt.Println(sendTxSeq)
 
@@ -99,6 +98,7 @@ func TestOrderFairness(t *testing.T) {
 		sumExTime += uint64(elapsed)
 		allExTime = append(allExTime, uint64(elapsed))
 		// fmt.Println(float64(uint64(elapsed)) / float64(1000000))
+		fmt.Println("finalTxSeq len: ", len(finalTxSeq))
 		// fmt.Println("finalTxSeq: ", finalTxSeq)
 
 		sRate := Metric_SuccessOrderRate(finalTxSeq, sendTxSeq)

@@ -11,8 +11,6 @@ import (
 	"github.com/relab/hotstuff/logging"
 	"github.com/relab/hotstuff/modules"
 
-	"github.com/relab/hotstuff/internal/proto/fairorderpb"
-
 	"github.com/relab/gorums"
 	"github.com/relab/hotstuff"
 	"github.com/relab/hotstuff/internal/proto/hotstuffpb"
@@ -30,7 +28,7 @@ type Replica struct {
 	pubKey        hotstuff.PublicKey
 	voteCancel    context.CancelFunc
 	newViewCancel context.CancelFunc
-	fairnode      *fairorderpb.Node  // RapidFair: 为collect操作提供对象
+	// fairnode      *fairorderpb.Node  // RapidFair: 为collect操作提供对象
 	collectCancel context.CancelFunc // RapidFair: 为Collect方法提供上下文取消
 	md            map[string]string
 }
@@ -67,12 +65,13 @@ func (r *Replica) Collect(col hotstuff.CollectTxSeq) {
 	r.collectCancel()
 	// 初始化collect的上下文
 	ctx, r.collectCancel = context.WithCancel(context.Background())
-	cTxSeq := fairorderpb.TxSeqToProto(col)
+	cTxSeq := hotstuffpb.CollectToProto(col)
 	// 调用fairorder_gorums.pb.go的Collect()发送collect给其他节点，怎么确定发送给leader？
-	r.fairnode.Collect(ctx, cTxSeq, gorums.WithNoSendWaiting())
+	r.node.Collect(ctx, cTxSeq, gorums.WithNoSendWaiting())
 }
 
 // NewView sends the quorum certificate to the other replica.
+// 发送qc给其他节点
 func (r *Replica) NewView(msg hotstuff.SyncInfo) {
 	if r.node == nil {
 		return
@@ -252,6 +251,8 @@ func (cfg *Config) Connect(replicas []ReplicaInfo) (err error) {
 		id := hotstuff.ID(node.ID())
 		replica := cfg.replicas[id].(*Replica)
 		replica.node = node
+		// RapidFair: baseline初始化fairnode
+		// replica.fairnode = node
 	}
 
 	cfg.connected = true
@@ -309,6 +310,11 @@ func (cfg *subConfig) QuorumSize() int {
 	return hotstuff.QuorumSize(cfg.Len())
 }
 
+// RapidFair: 返回公平排序定义下的quorumsize
+func (cfg *subConfig) QuorumSizeFair() int {
+	return hotstuff.QuorumSizeFair(cfg.Len(), cfg.opts.ThemisGamma())
+}
+
 // Propose sends the block to all replicas in the configuration
 // config是发送block给所有节点
 func (cfg *subConfig) Propose(proposal hotstuff.ProposeMsg) {
@@ -346,6 +352,18 @@ func (cfg *subConfig) Fetch(ctx context.Context, hash hotstuff.Hash) (*hotstuff.
 		return nil, false
 	}
 	return hotstuffpb.BlockFromProto(protoBlock), true
+}
+
+// RapidFair: baseline leader广播ReadyCollectMsg给所有replica
+func (cfg *subConfig) ReadyCollect(rc hotstuff.ReadyCollectMsg) {
+	if cfg.cfg == nil {
+		return
+	}
+	cfg.cfg.ReadyCollect(
+		cfg.synchronizer.ViewContext(),
+		hotstuffpb.ReadyCollectMsgToProto(rc),
+		gorums.WithNoSendWaiting(),
+	)
 }
 
 // Close closes all connections made by this configuration.

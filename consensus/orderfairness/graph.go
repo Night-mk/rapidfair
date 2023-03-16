@@ -216,16 +216,17 @@ func findEdges(txList [][]string, vertList []string, n int, f int, gamma float32
 		}
 	}
 	// 筛选edge M[m][m']加入有向图
+	// thres = n*(1-gamma)+f+1
 	threshold := float32(n)*(float32(1)-gamma) + float32(f) + 1
-	// 输出数组["tx1,tx2","tx1,tx3",...]
+	// 输出数组["tx1;tx2","tx1;tx3",...]
 	for k1, v1 := range vertList {
 		if k1 < len(vertList)-1 {
 			for k2 := k1 + 1; k2 < len(vertList); k2++ {
 				if (txDict[v1][vertList[k2]] > txDict[vertList[k2]][v1]) && (txDict[v1][vertList[k2]] >= int(threshold)) {
-					txEdge = append(txEdge, v1+","+vertList[k2])
+					txEdge = append(txEdge, v1+";"+vertList[k2])
 				}
 				if (txDict[v1][vertList[k2]] < txDict[vertList[k2]][v1]) && (txDict[vertList[k2]][v1] >= int(threshold)) {
-					txEdge = append(txEdge, vertList[k2]+","+v1)
+					txEdge = append(txEdge, vertList[k2]+";"+v1)
 				}
 			}
 		}
@@ -234,13 +235,14 @@ func findEdges(txList [][]string, vertList []string, n int, f int, gamma float32
 }
 
 // 按交易序列构建有向图
+// constructGraph这里有对交易的类型做了区别
 func constructGraph(vertices []string, edges []string) *Graph {
 	g := NewGraph()
 	for _, v := range vertices {
 		g.addVertex(VT(v))
 	}
 	for _, v1 := range edges {
-		res := strings.Split(v1, ",") // 拆分字符串
+		res := strings.Split(v1, ";") // 拆分字符串
 		g.addEdge(VT(res[0]), VT(res[1]))
 	}
 	return g
@@ -524,20 +526,18 @@ func GetRemainTxList(txList []string, finalSeq []VT) (remainTxList []string) {
 // 输入：交易序列，节点数，fault，gamma
 // 输出：排序后的交易序列
 func FairOrder_Themis(txList [][]string, nodeNum int, gamma float32) (finalTxSeq []VT) {
-	// func FairOrder_Themis(txList [][]string, nodeNum int, fault int, gamma float32) {
 	// 计算fault replica数量, Themis中：f<=(n-1)(2*gamma-1)/4
-	// f := int(math.Floor(float64(nodeNum) / float64(fault)))
 	f := int(math.Floor((float64(nodeNum-1) * float64(2*gamma-1)) / float64(4)))
 	// fmt.Println("fault replica num: ", f)
+	// fmt.Printf("quorum len: %d, txList len: %d\n", len(txList), len(txList[0]))
 	// 1. 交易列表 构建 -> 有向图
 	vertices, txListNew := findVertex(txList, nodeNum, f)
 	// fmt.Println("=====fair order part=====")
-	// fmt.Println("vertices: ", vertices)
+	// fmt.Println("vertices len: ", len(vertices))
 	// fmt.Println("ordered txs: ", txListNew)
 	edges := findEdges(txListNew, vertices, nodeNum, f, gamma)
 	// fmt.Println("edges: ", edges)
 	g := constructGraph(vertices, edges) // 构建有向图
-	// g.Print()
 	// 2. 排序有向图
 	// 2.1 查找有向图中的scc
 	sccdata := InitScc(g)
@@ -552,11 +552,11 @@ func FairOrder_Themis(txList [][]string, nodeNum int, gamma float32) (finalTxSeq
 	// fmt.Println("all scc: ", scc)
 	// 2.2 对有向图中的scc进行condensation（缩合），构建有向无环图，并排序scc中的交易
 	g1, sccSeq := graphCondensation(g, scc)
+	// fmt.Println("scc seq: ", sccSeq)
 	// 2.3 计算有向无环图的拓扑排序
 	topoSeq := topoSort(g1)
 	// 2.4 计算最终排序(拓扑排序+scc内部排序)
 	finalTxSeq = finalSort(topoSeq, sccSeq)
-
 	// fmt.Println("finalTxSeq: ", finalTxSeq)
 
 	return finalTxSeq

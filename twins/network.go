@@ -324,6 +324,11 @@ func (c *configuration) QuorumSize() int {
 	return hotstuff.QuorumSize(c.Len())
 }
 
+// RapidFair
+func (c *configuration) QuorumSizeFair() int {
+	return hotstuff.QuorumSizeFair(c.Len(), 1)
+}
+
 // Propose sends the block to all replicas in the configuration.
 func (c *configuration) Propose(proposal hotstuff.ProposeMsg) {
 	c.broadcastMessage(proposal)
@@ -348,6 +353,11 @@ func (c *configuration) Fetch(_ context.Context, hash hotstuff.Hash) (block *hot
 		}
 	}
 	return nil, false
+}
+
+// RapidFair: ReadyCollect sends the readycollect message to all replicas.
+func (c *configuration) ReadyCollect(msg hotstuff.ReadyCollectMsg) {
+	c.broadcastMessage(msg)
 }
 
 type replica struct {

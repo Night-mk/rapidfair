@@ -10,6 +10,7 @@ type Welford struct {
 }
 
 // Update adds the value to the current estimate.
+// 总之就是计算均值和方差
 func (w *Welford) Update(val float64) {
 	w.count++
 	delta := val - w.mean

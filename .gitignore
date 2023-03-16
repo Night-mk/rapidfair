@@ -30,6 +30,7 @@ rr/
 scripts/id
 scripts/id.pub
 scripts/known_hosts
+scripts/configs
 
 measurements.json
 *.pdf
@@ -39,3 +40,6 @@ twins.json
 .vscode/
 .github/
 .golangci.yml
+
+# exp data dir
+expdata/

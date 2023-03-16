@@ -124,9 +124,8 @@ func (vm *VotingMachine) verifyCert(cert hotstuff.PartialCert, block *hotstuff.B
 		return
 	}
 	delete(vm.verifiedVotes, cert.BlockHash())
-	// 为什么每次在接收到足够多vote最后都发送NewViewMsg来推进view？（默认采用pipelined结构hotstuff？）
+	// Leader每次在接收到足够多vote最后都发送NewViewMsg来推进view（默认采用pipelined结构hotstuff？）
 	// 处理NewViewMsg的方法在synchronizer.go中，使用AdvanceView()
+	vm.logger.Infof("[OnVote]: Leader call advanceView() actively")
 	vm.eventLoop.AddEvent(hotstuff.NewViewMsg{ID: vm.opts.ID(), SyncInfo: hotstuff.NewSyncInfo().WithQC(qc)})
 }
-
-// RapidFair: baseline 公平排序验证

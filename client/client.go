@@ -38,6 +38,7 @@ func (q *qspec) ExecCommandQF(_ *clientpb.Command, signatures map[uint32]*emptyp
 	return &emptypb.Empty{}, true
 }
 
+// pendingCmd包含序列号，发送时间，
 type pendingCmd struct {
 	sequenceNumber uint64
 	sendTime       time.Time
@@ -165,6 +166,7 @@ func (c *Client) Run(ctx context.Context) {
 	err := c.sendCommands(ctx)
 	if err != nil && !errors.Is(err, io.EOF) {
 		c.logger.Panicf("Failed to send commands: %v", err)
+		// c.logger.Infof("Failed to send commands: %v", err)
 	}
 	c.close()
 
@@ -231,6 +233,7 @@ loop:
 		c.mut.Unlock()
 
 		if shouldStop {
+			c.logger.Info("should stop")
 			break
 		}
 
@@ -238,6 +241,7 @@ loop:
 		// 从哪里读取data数据？输入流是哪里？[读入的是随机数据]
 		n, err := c.reader.Read(data)
 		if err != nil && err != io.EOF {
+			c.logger.Infof("read data error: %v\n", err)
 			// if we get an error other than EOF
 			return err
 		} else if err == io.EOF && n == 0 && lastCommand > num {
@@ -254,18 +258,20 @@ loop:
 		ctx, cancel := context.WithTimeout(ctx, c.timeout)
 		// ExecCommand sends a command to all replicas and waits for valid signatures from f+1 replicas
 		// ExecCommand发送一个command给所有replicas，并等待f+1个replica的valid sigs
-		// ExecCommand在./replica/clientsrv.go中实现
+		// ExecCommand在./internal/proto/clientpb/client_gorums.pb.go中实现
+		// 返回*AsyncEmpty类型作为pendingCmd的promise参数
 		promise := c.gorumsConfig.ExecCommand(ctx, cmd)
 		pending := pendingCmd{sequenceNumber: num, sendTime: time.Now(), promise: promise, cancelCtx: cancel}
+		// c.logger.Infof("send tx sequenceNumber: %d, payloadSize: %d", pending.sequenceNumber, c.payloadSize)
 
 		num++
 		select {
-		case c.pendingCmds <- pending:
+		case c.pendingCmds <- pending: // 将等待的交易写入通道
 		case <-ctx.Done():
 			break loop
 		}
-		// 确实每个循环只发一个消息？
-		if num%100 == 0 {
+		// 每个循环只发一个消息
+		if num%1000 == 0 {
 			c.logger.Infof("%d commands sent", num)
 			c.logger.Infof("payloadSize: %d", c.payloadSize)
 		}
@@ -277,7 +283,6 @@ loop:
 // handleCommands will get pending commands from the pendingCmds channel and then
 // handle them as they become acknowledged by the replicas. We expect the commands to be
 // acknowledged in the order that they were sent.
-// 这个方法为啥没return三个值?
 func (c *Client) handleCommands(ctx context.Context) (executed, failed, timeout int) {
 	for {
 		var (
@@ -285,18 +290,21 @@ func (c *Client) handleCommands(ctx context.Context) (executed, failed, timeout 
 			ok  bool
 		)
 		select {
-		case cmd, ok = <-c.pendingCmds:
+		case cmd, ok = <-c.pendingCmds: // 从通道中读取交易
 			if !ok {
 				return
 			}
 		case <-ctx.Done():
 			return
 		}
+		// cmd.promise的类型：*clientpb.AsyncEmpty（proto的消息类型）
 		_, err := cmd.promise.Get()
 		if err != nil {
+			c.logger.Debugf("cmd promise get err: %v\n", err)
 			qcError, ok := err.(gorums.QuorumCallError)
 			if ok && qcError.Reason == context.DeadlineExceeded.Error() {
 				c.logger.Debug("Command timed out.")
+				// c.logger.Info("Command timed out.")
 				timeout++
 			} else if !ok || qcError.Reason != context.Canceled.Error() {
 				c.logger.Debugf("Did not get enough replies for command: %v\n", err)

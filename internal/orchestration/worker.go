@@ -17,7 +17,6 @@ import (
 	"github.com/relab/hotstuff/client"
 	"github.com/relab/hotstuff/consensus"
 	"github.com/relab/hotstuff/consensus/byzantine"
-	"github.com/relab/hotstuff/consensus/orderfairness"
 	"github.com/relab/hotstuff/crypto"
 	"github.com/relab/hotstuff/crypto/keygen"
 	"github.com/relab/hotstuff/eventloop"
@@ -58,6 +57,7 @@ type Worker struct {
 }
 
 // Run runs the worker until it receives a command to quit.
+// ./internal/cli/worker.go 在执行cmd命令时执行runWorker()调用这里的Run()
 func (w *Worker) Run() error {
 	for {
 		msg, err := w.recv.ReadAny()
@@ -146,6 +146,7 @@ func (w *Worker) createReplicas(req *orchestrationpb.CreateReplicaRequest) (*orc
 }
 
 func (w *Worker) createReplica(opts *orchestrationpb.ReplicaOpts) (*replica.Replica, error) {
+	// fmt.Println("use worker to create replica")
 	w.metricsLogger.Log(opts)
 
 	// get private key and certificates
@@ -190,6 +191,7 @@ func (w *Worker) createReplica(opts *orchestrationpb.ReplicaOpts) (*replica.Repl
 		return nil, fmt.Errorf("invalid leader-rotation algorithm: '%s'", opts.GetLeaderRotation())
 	}
 
+	// 在synchronizer中设置初始的view duration
 	sync := synchronizer.New(synchronizer.NewViewDuration(
 		uint64(opts.GetTimeoutSamples()),
 		float64(opts.GetInitialTimeout().AsDuration().Nanoseconds())/float64(time.Millisecond),
@@ -202,6 +204,7 @@ func (w *Worker) createReplica(opts *orchestrationpb.ReplicaOpts) (*replica.Repl
 		eventloop.New(1000), // 定死了eventloop的buffer只有1000个？一个replica
 		consensus.New(consensusRules),
 		consensus.NewVotingMachine(),     // 增加votemachine
+		consensus.NewCollectMachine(),    // 增加CollectMachine module
 		crypto.NewCache(cryptoImpl, 100), // TODO: consider making this configurable
 		leaderRotation,
 		sync,
@@ -212,9 +215,7 @@ func (w *Worker) createReplica(opts *orchestrationpb.ReplicaOpts) (*replica.Repl
 
 	// RapidFair: baseline 设置是否使用fairorder, collect等
 	if opts.GetUseFairOrder() {
-		builder.Add(
-			orderfairness.NewCollectMachine(), // 增加CollectMachine module
-		)
+		// builder.Add()
 		builder.Options().SetUseFairOrder()
 		builder.Options().SetThemisGamma(opts.GetThemisGamma())
 	}
@@ -328,11 +329,11 @@ func (w *Worker) startClients(req *orchestrationpb.StartClientRequest) (*orchest
 		if err != nil {
 			return nil, err
 		}
-		err = cli.Connect(cfg)
+		err = cli.Connect(cfg) // ./client/client.go 连接client和配置中的replicas
 		if err != nil {
 			return nil, err
 		}
-		cli.Start()
+		cli.Start() // ./client/client.go 启动client
 		w.metricsLogger.Log(&types.StartEvent{Event: types.NewClientEvent(opts.GetID(), time.Now())})
 		w.clients[hotstuff.ID(opts.GetID())] = cli
 	}

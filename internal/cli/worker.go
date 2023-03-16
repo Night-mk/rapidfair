@@ -37,7 +37,7 @@ This is only intended to be used by a controller (hotstuff run).`,
 }
 
 func init() {
-	rootCmd.AddCommand(workerCmd)
+	rootCmd.AddCommand(workerCmd) // 使用root.go中的rootCmd变量增加命令workerCmd
 
 	// Here you will define your flags and configuration settings.
 

@@ -1,7 +1,6 @@
 package hotstuffpb
 
 import (
-	"encoding/json"
 	fmt "fmt"
 	"math/big"
 
@@ -9,6 +8,8 @@ import (
 	"github.com/relab/hotstuff/crypto"
 	"github.com/relab/hotstuff/crypto/bls12"
 	"github.com/relab/hotstuff/crypto/ecdsa"
+	"github.com/relab/hotstuff/internal/proto/clientpb"
+	"google.golang.org/protobuf/proto"
 )
 
 // QuorumSignatureToProto converts a threshold signature to a protocol buffers message.
@@ -116,11 +117,26 @@ func ProposalFromProto(p *Proposal) (proposal hotstuff.ProposeMsg) {
 // BlockToProto converts a consensus.Block to a hotstuffpb.Block.
 func BlockToProto(block *hotstuff.Block) *Block {
 	parentHash := block.Parent()
-	// RapidFair: baseline 将TxSeq map转为[]bytes
-	txSeqB, err := json.Marshal(block.TxSeq())
-	if err != nil {
-		fmt.Printf("[BlockToProto]: TxSeq serialization error: err=%v", err)
+	// RapidFair: baseline 将TxSeq map转为[]bytes (使用proto的marshal)
+	txSeqB := []byte{}
+	err := error(nil)
+	if len(block.TxSeq()) > 0 {
+		mapbatch := new(clientpb.MapBatch)
+		// 对MapBatch的MapTxSeq进行初始化
+		if len(mapbatch.MapTxSeq) == 0 {
+			mapbatch.MapTxSeq = make(map[uint32][]byte)
+		}
+		marshaler := proto.MarshalOptions{Deterministic: true}
+		for k, v := range block.TxSeq() {
+			mapbatch.MapTxSeq[uint32(k)] = []byte(v)
+		}
+		txSeqB, err = marshaler.Marshal(mapbatch)
+		if err != nil {
+			fmt.Printf("[BlockToProto]: TxSeq serialization error: err=%v", err)
+		}
 	}
+	// RapidFair: END
+
 	return &Block{
 		Parent:   parentHash[:],
 		Command:  []byte(block.Command()),
@@ -135,12 +151,20 @@ func BlockToProto(block *hotstuff.Block) *Block {
 func BlockFromProto(block *Block) *hotstuff.Block {
 	var p hotstuff.Hash
 	copy(p[:], block.GetParent())
-	// 反序列化TxSeq, []bytes转为map
-	txSeq := make(map[hotstuff.ID]hotstuff.Command)
-	err := json.Unmarshal(block.GetTxSeq(), &txSeq)
+	// RapidFair: baseline 反序列化TxSeq, []bytes转为map[uint32][]byte
+	mapbatch := new(clientpb.MapBatch)
+	unmarshaler := proto.UnmarshalOptions{DiscardUnknown: true}
+	err := unmarshaler.Unmarshal(block.GetTxSeq(), mapbatch)
 	if err != nil {
 		fmt.Printf("[BlockFromProto]: TxSeq unserialization error: err=%v", err)
 	}
+	txSeq := make(map[hotstuff.ID]hotstuff.Command)
+	if len(mapbatch.GetMapTxSeq()) > 0 {
+		for k, v := range mapbatch.GetMapTxSeq() {
+			txSeq[hotstuff.ID(k)] = hotstuff.Command(string(v))
+		}
+	}
+	// RapidFair: END
 	if len(txSeq) > 0 { // order-fairness block
 		return hotstuff.NewFairBlock(
 			p,
@@ -246,4 +270,40 @@ func SyncInfoToProto(syncInfo hotstuff.SyncInfo) *SyncInfo {
 		m.AggQC = AggregateQCToProto(aggQC)
 	}
 	return m
+}
+
+// RapidFair: baseline
+// 将输入数据转化proto类型的消息
+func CollectToProto(col hotstuff.CollectTxSeq) *CollectTxSeq {
+	// 获取当前的view ID（baseline中collect阶段的viewID和共识相同）
+	// 将交易列表Command转为bytes
+	return &CollectTxSeq{
+		View:     uint64(col.View()),
+		TxSeq:    []byte(col.TxSeq()),
+		SyncInfo: SyncInfoToProto(col.SyncInfo()),
+	}
+}
+
+// 将proto数据转换为hotstuff中可以处理的数据结构
+func CollectFromProto(col *CollectTxSeq) hotstuff.CollectTxSeq {
+	// command转[]byte到string
+	command := hotstuff.Command(col.GetTxSeq())
+	syncInfo := SyncInfoFromProto(col.GetSyncInfo())
+	return hotstuff.NewCollectTxSeq(hotstuff.View(col.GetView()), command, syncInfo)
+}
+
+// 将hotstuff.ReadyCollect数据转为proto类型
+func ReadyCollectMsgToProto(rc hotstuff.ReadyCollectMsg) *ReadyCollectMsg {
+	return &ReadyCollectMsg{
+		View:     uint64(rc.ReadyCollect.View()),
+		SyncInfo: SyncInfoToProto(rc.ReadyCollect.SyncInfo()),
+	}
+}
+
+// 将proto.ReadyCollectMsg数据转为hotstuff.ReadyCollect类型
+func ReadyCollectMsgFromProto(rc *ReadyCollectMsg) hotstuff.ReadyCollectMsg {
+	syncInfo := SyncInfoFromProto(rc.GetSyncInfo())
+	return hotstuff.ReadyCollectMsg{
+		ReadyCollect: hotstuff.NewReadyCollect(hotstuff.View(rc.GetView()), syncInfo),
+	}
 }

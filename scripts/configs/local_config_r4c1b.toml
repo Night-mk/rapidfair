@@ -1,6 +1,0 @@
-# config nodes and clients
-clients = 1
-replicas = 5
-
-batch-size = 200
-consensus = "chainedhotstuff"

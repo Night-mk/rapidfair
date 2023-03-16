@@ -41,6 +41,7 @@ func (dl *jsonLogger) InitModule(mods *modules.Core) {
 	mods.Get(&dl.logger)
 }
 
+// 记录metric的日志
 func (dl *jsonLogger) Log(msg proto.Message) {
 	var (
 		any *anypb.Any
@@ -54,7 +55,7 @@ func (dl *jsonLogger) Log(msg proto.Message) {
 			return
 		}
 	}
-	err = dl.write(any)
+	err = dl.write(any) //调用write将msg写入文件
 	if err != nil {
 		dl.logger.Errorf("failed to write message to log: %v", err)
 	}
