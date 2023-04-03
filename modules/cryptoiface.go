@@ -34,4 +34,14 @@ type Crypto interface {
 	VerifyTimeoutCert(tc hotstuff.TimeoutCert) bool
 	// VerifyAggregateQC verifies an AggregateQC.
 	VerifyAggregateQC(aggQC hotstuff.AggregateQC) (highQC hotstuff.QuorumCert, ok bool)
+
+	// RapidFair 增加对TxSeqFragment的阈值签名相关方法
+	// CreatePartialCert signs a single TxSeqFragment and returns the partial certificate.
+	CreatePartialCertTSF(tsf *hotstuff.TxSeqFragment) (cert hotstuff.PartialCert, err error)
+	// CreateQuorumCertTSF creates a quorum certificate from a list of partial certificates (TxSeqFragment).
+	CreateQuorumCertTSF(tsf *hotstuff.TxSeqFragment, signatures []hotstuff.PartialCert) (cert hotstuff.QuorumCert, err error)
+	// VerifyPartialCertTSF verifies a single partial certificate (TxSeqFragment).
+	VerifyPartialCertTSF(cert hotstuff.PartialCert) bool
+	// VerifyPartialCertTSF verifies a quorum certificate for (TxSeqFragment).
+	VerifyQuorumCertTSF(qc hotstuff.QuorumCert) bool
 }

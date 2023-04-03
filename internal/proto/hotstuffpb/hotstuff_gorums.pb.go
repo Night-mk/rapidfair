@@ -175,11 +175,24 @@ func (c *Configuration) Timeout(ctx context.Context, in *TimeoutMsg, opts ...gor
 // Reference imports to suppress errors if they are not otherwise used.
 var _ emptypb.Empty
 
-// 增加readyCollect阶段，leader需要广播ReadyCollectMsg，通知replicas可以开始发送collect消息给当前leader
+// RapidFair: baseline增加readyCollect阶段，leader需要广播ReadyCollectMsg，通知replicas可以开始发送collect消息给当前leader
 func (c *Configuration) ReadyCollect(ctx context.Context, in *ReadyCollectMsg, opts ...gorums.CallOption) {
 	cd := gorums.QuorumCallData{
 		Message: in,
 		Method:  "hotstuffpb.Hotstuff.ReadyCollect",
+	}
+
+	c.RawConfiguration.Multicast(ctx, cd, opts...)
+}
+
+// Reference imports to suppress errors if they are not otherwise used.
+var _ emptypb.Empty
+
+// RapidFair: 实现PreNotify，leader通知其他节点
+func (c *Configuration) PreNotify(ctx context.Context, in *PreNotifyMsg, opts ...gorums.CallOption) {
+	cd := gorums.QuorumCallData{
+		Message: in,
+		Method:  "hotstuffpb.Hotstuff.PreNotify",
 	}
 
 	c.RawConfiguration.Multicast(ctx, cd, opts...)
@@ -228,6 +241,8 @@ type Hotstuff interface {
 	Fetch(ctx gorums.ServerCtx, request *BlockHash) (response *Block, err error)
 	Collect(ctx gorums.ServerCtx, request *CollectTxSeq)
 	ReadyCollect(ctx gorums.ServerCtx, request *ReadyCollectMsg)
+	MultiCollect(ctx gorums.ServerCtx, request *MCollect)
+	PreNotify(ctx gorums.ServerCtx, request *PreNotifyMsg)
 }
 
 func RegisterHotstuffServer(srv *gorums.Server, impl Hotstuff) {
@@ -266,6 +281,16 @@ func RegisterHotstuffServer(srv *gorums.Server, impl Hotstuff) {
 		req := in.Message.(*ReadyCollectMsg)
 		defer ctx.Release()
 		impl.ReadyCollect(ctx, req)
+	})
+	srv.RegisterHandler("hotstuffpb.Hotstuff.MultiCollect", func(ctx gorums.ServerCtx, in *gorums.Message, _ chan<- *gorums.Message) {
+		req := in.Message.(*MCollect)
+		defer ctx.Release()
+		impl.MultiCollect(ctx, req)
+	})
+	srv.RegisterHandler("hotstuffpb.Hotstuff.PreNotify", func(ctx gorums.ServerCtx, in *gorums.Message, _ chan<- *gorums.Message) {
+		req := in.Message.(*PreNotifyMsg)
+		defer ctx.Release()
+		impl.PreNotify(ctx, req)
 	})
 }
 
@@ -308,6 +333,19 @@ func (n *Node) Collect(ctx context.Context, in *CollectTxSeq, opts ...gorums.Cal
 	cd := gorums.CallData{
 		Message: in,
 		Method:  "hotstuffpb.Hotstuff.Collect",
+	}
+
+	n.RawNode.Unicast(ctx, cd, opts...)
+}
+
+// Reference imports to suppress errors if they are not otherwise used.
+var _ emptypb.Empty
+
+// RapidFair: 实现单播的multicollect通信
+func (n *Node) MultiCollect(ctx context.Context, in *MCollect, opts ...gorums.CallOption) {
+	cd := gorums.CallData{
+		Message: in,
+		Method:  "hotstuffpb.Hotstuff.MultiCollect",
 	}
 
 	n.RawNode.Unicast(ctx, cd, opts...)

@@ -39,9 +39,9 @@ type CollectMachine struct {
 
 	mut            sync.Mutex
 	collectedTxSeq map[hotstuff.View]map[hotstuff.ID]hotstuff.Command // 按view存储收集的交易序列列表
-	orderedCommand hotstuff.Command                                   // 存储公平排序后的交易序列
-	marshaler      proto.MarshalOptions                               // 序列化（来自proto）
-	unmarshaler    proto.UnmarshalOptions                             // 反序列化
+	// orderedCommand hotstuff.Command                                   // 存储公平排序后的交易序列
+	marshaler   proto.MarshalOptions   // 序列化（来自proto）
+	unmarshaler proto.UnmarshalOptions // 反序列化
 }
 
 // 创建一个新NewCollectMachine
@@ -181,15 +181,15 @@ func (cm *CollectMachine) OnCollect(col hotstuff.CollectMsg) {
 		return
 	}
 	// 2. 计算公平排序序列（考虑同步 or 异步）
-	cm.FairOrder(cm.collectedTxSeq[newView])
+	odc := cm.FairOrder(hotstuff.TXList(cm.collectedTxSeq[newView]))
 	// 3. 公平排序好交易之后，调用FairPropose(cert, cmd)
 	// OnCollect也只有leader能处理
-	odc := cm.orderedCommand
+	// odc := cm.orderedCommand
 	colTxSeq := make(map[hotstuff.ID]hotstuff.Command)
 	for k, v := range cm.collectedTxSeq[newView] {
 		colTxSeq[k] = v
 	}
-	cm.orderedCommand = hotstuff.Command("") // 垃圾回收
+	// cm.orderedCommand = hotstuff.Command("") // 垃圾回收
 	// 当前view的leader收集的交易序列应该延后清空，在本view的区块已经完成vote之后再清空（在下一个view的OnReadyCollect中清空？）
 	// cm.collectedTxSeq = make(map[hotstuff.View]map[hotstuff.ID]hotstuff.Command)
 	// leader调用fairpropose方法
@@ -202,13 +202,12 @@ func (cm *CollectMachine) OnCollect(col hotstuff.CollectMsg) {
 // 2. 交易消息转换Command -> []string
 // 3. [][]string矩阵构建
 // 4. 调用graph-based公平排序方法计算排序序列 orderedSeq
-// 5. 使用orderedSeq重构hotstuff.Command，写入cm.OrderedCommand
-func (cm *CollectMachine) FairOrder(cTxSeq map[hotstuff.ID]hotstuff.Command) {
+// 5. 使用orderedSeq重构hotstuff.Command，返回cm.OrderedCommand
+func (cm *CollectMachine) FairOrder(cTxSeq hotstuff.TXList) hotstuff.Command {
 	cm.mut.Lock()
 	defer cm.mut.Unlock()
-	// 如果收到的交易序列数量小于quorum
-	if len(cTxSeq) < cm.configuration.QuorumSizeFair() {
-		return
+	if len(cTxSeq) == 0 {
+		return hotstuff.Command("")
 	}
 	// 交易序列数量超过quorum时
 	// 转换消息，构建[][]string矩阵
@@ -222,26 +221,31 @@ func (cm *CollectMachine) FairOrder(cTxSeq map[hotstuff.ID]hotstuff.Command) {
 		}
 		cm.logger.Infof("Run [FairOrder]: len(collectedTxSeq)=%d, QuorumSize=%d, nodeNum=%d, gamma=%f, len(txList[])=%v\n", len(cTxSeq), cm.configuration.QuorumSize(), cm.configuration.Len(), cm.opts.ThemisGamma(), alltxListlen)
 	*/
+	/*
+		start := time.Now()
+		finalTxSeq := orderfairness.FairOrder_Themis(txList, cm.configuration.Len(), cm.opts.ThemisGamma())
+		elapsed := time.Since(start)
+		cm.logger.Info("FairOrder Execution time:", elapsed)
+	*/
 	// 公平排序Themis（传入参数控制），输出[]VT类型序列
 	finalTxSeq := orderfairness.FairOrder_Themis(txList, cm.configuration.Len(), cm.opts.ThemisGamma())
+	cm.logger.Debugf("[Collect-FairOrder]: tx seq len after fair order: %d\n", len(finalTxSeq))
 	// 利用公平排序结果重构command，序列化，
 	fairBatch := new(clientpb.Batch)
 	for _, data := range finalTxSeq {
 		c := txinfo[string(data)]
 		fairBatch.Commands = append(fairBatch.Commands, c)
 	}
-	cm.logger.Infof("[Collect-FairOrder]: tx seq len after fair order: %d\n", len(finalTxSeq))
 	b, err := cm.marshaler.Marshal(fairBatch)
 	if err != nil {
 		cm.logger.Errorf("[CollectMachine-FairOrder]: Failed to marshal fairBatch: %v", err)
-		return
 	}
 	// 将序列化后的batch数据，再转变为hotstuff.Command类型，并存入cm.orderedCommand
-	cm.orderedCommand = hotstuff.Command(b)
+	return hotstuff.Command(b)
 }
 
 // 利用txSeq构建[][]string矩阵，并缓存交易的clientID,SequenceNumber
-func (cm *CollectMachine) ConstructTxList(txSeq map[hotstuff.ID]hotstuff.Command) ([][]string, map[string]*clientpb.Command) {
+func (cm *CollectMachine) ConstructTxList(txSeq hotstuff.TXList) ([][]string, map[string]*clientpb.Command) {
 	txList := make([][]string, 0)
 	txinfo := make(map[string]*clientpb.Command)
 	// for replicaId, ct := range txSeq {
@@ -274,7 +278,7 @@ func (cm *CollectMachine) ConstructTxList(txSeq map[hotstuff.ID]hotstuff.Command
 func (cm *CollectMachine) ReadyCollect(syncInfo hotstuff.SyncInfo) {
 	// 调用ReadyCollect时，leader已经在synchronizer更新了currentView
 	v := cm.synchronizer.View()
-	cm.logger.Infof("ReadyCollect from leader, view: %d", v)
+	cm.logger.Debugf("ReadyCollect from leader, view: %d", v)
 	rc := hotstuff.ReadyCollectMsg{
 		ID:           cm.opts.ID(),
 		ReadyCollect: hotstuff.NewReadyCollect(v, syncInfo),

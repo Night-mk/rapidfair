@@ -65,7 +65,7 @@ type CommitEvent struct {
 	Commands int
 }
 
-// RapidFair: 在event中增加collectMsg类型
+// RapidFair: baseline 在event中增加collectMsg类型
 type CollectMsg struct {
 	ID           ID
 	CollectTxSeq CollectTxSeq
@@ -77,10 +77,27 @@ func (col CollectMsg) String() string {
 	return fmt.Sprintf("ID: %d, View: %d, TxSeqLen: %d", col.ID, v, len(txSeq))
 }
 
-// 增加ReadyCollectMsg类型的消息，leader广播通知replica节点能发送collect给当前leader
+// 增加ReadyCollectMsg类型的消息，leader广播通知replica能发送collect给当前leader
 type ReadyCollectMsg struct {
 	ID           ID
 	ReadyCollect ReadyCollect
+}
+
+// RapidFair: 新增PreNotify消息类型，leader广播通知replica使用了哪n-f个交易序列
+type PreNotifyMsg struct {
+	ID            ID
+	TxSeqFragment *TxSeqFragment
+}
+
+type MultiCollectMsg struct {
+	ID           ID
+	MultiCollect MultiCollect
+}
+
+// 推进virtual view的事件
+type NewVirViewMsg struct {
+	ID    ID
+	VSync SyncInfo
 }
 
 // RapidFair END

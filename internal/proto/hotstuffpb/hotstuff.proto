@@ -34,28 +34,59 @@ service Hotstuff {
       option (gorums.unicast) = true; // 单播是replica给当前leader节点发消息
   }
 
-  // 增加readyCollect阶段，leader需要广播ReadyCollectMsg，通知replicas可以开始发送collect消息给当前leader
+  // RapidFair: baseline增加readyCollect阶段，leader需要广播ReadyCollectMsg，通知replicas可以开始发送collect消息给当前leader
   rpc ReadyCollect(ReadyCollectMsg) returns (google.protobuf.Empty) {
     option (gorums.multicast) = true;
   }
-
   // baseline中Collect阶段用quorumcall会快吗？
+
+  // RapidFair: 实现单播的multicollect通信
+  rpc MultiCollect(MCollect) returns (google.protobuf.Empty) {
+    // option (gorums.multicast) = true;
+    option (gorums.unicast) = true;
+  }
+
+  // RapidFair: 实现PreNotify，leader通知其他节点
+  rpc PreNotify(PreNotifyMsg) returns (google.protobuf.Empty) {
+    option (gorums.multicast) = true;
+  }
 }
 
-// RapidFair: baseline
-// 收集交易序列的消息
+
+// RapidFair: baseline收集交易序列的消息
 message CollectTxSeq {
-  // uint32 ReplicaId = 1; // replica ID
   uint64 View = 1; // collect阶段对应的view，leader收到消息后如果发现该view的消息已经发过，则不会处理重复的消息
   bytes TxSeq = 2; // 交易序列数组进行序列化变为byte
   SyncInfo SyncInfo = 3; // 给collect消息增加同步信息
 }
 
-// 通知可以开始收集交易序列的消息
+// RapidFair: baseline通知可以开始收集交易序列的消息
 message ReadyCollectMsg{
   uint64 View = 1;
   SyncInfo SyncInfo = 2;
 }
+
+// RapidFair: leader通知其他replica使用n-f个节点的交易序列
+message PreNotifyMsg{
+  TxSeqFragment TxSeqFragment = 1; 
+}
+
+// 新增TxSeqFragment类型
+message TxSeqFragment{
+  bytes Parent = 1;
+  QuorumCert QC = 2;
+  uint64 VirView = 3;
+  uint32 Leader = 4;
+  map<uint32, bytes> TxSeqHash = 5; // Map<replica.ID, Command([hash(tx1),hash(tx2),...])>
+}
+
+// 新增MCollect类型（要包含对TxSeqFragment的PC消息）
+message MCollect{
+  uint64 VirView = 1;
+  bytes TxSeq = 2;
+  PartialCert PC = 3;
+}
+
 
 message Proposal {
   Block Block = 1;
@@ -79,6 +110,17 @@ message Block {
   bytes Command = 4;
   uint32 Proposer = 5;
   bytes TxSeq = 6;
+  repeated FragmentData FragmentData = 7;
+}
+
+// RapidFair: 在block中增加FragmentData类型的数组
+message FragmentData {
+  bytes Hash = 1;
+  uint64 VirView = 2;
+  bytes OrderedTx = 3;
+  bytes TxSeq = 4;
+  bytes MissEdge = 5;
+  bytes UpdateSeq = 6;
 }
 
 message ECDSASignature {

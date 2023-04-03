@@ -23,14 +23,14 @@ import (
 
 // Replica provides methods used by hotstuff to send messages to replicas.
 type Replica struct {
-	node          *hotstuffpb.Node
-	id            hotstuff.ID
-	pubKey        hotstuff.PublicKey
-	voteCancel    context.CancelFunc
-	newViewCancel context.CancelFunc
-	// fairnode      *fairorderpb.Node  // RapidFair: 为collect操作提供对象
-	collectCancel context.CancelFunc // RapidFair: 为Collect方法提供上下文取消
-	md            map[string]string
+	node               *hotstuffpb.Node
+	id                 hotstuff.ID
+	pubKey             hotstuff.PublicKey
+	voteCancel         context.CancelFunc
+	newViewCancel      context.CancelFunc
+	collectCancel      context.CancelFunc // RapidFair: 为Collect方法提供上下文取消
+	multiCollectCancel context.CancelFunc // RapidFair: 为MultiCollect方法提供上下文取消
+	md                 map[string]string
 }
 
 // ID returns the replica's ID.
@@ -56,7 +56,7 @@ func (r *Replica) Vote(cert hotstuff.PartialCert) {
 	r.node.Vote(ctx, pCert, gorums.WithNoSendWaiting())
 }
 
-// RapidFair: collect发送交易序列（或交易序列哈希）给其他replica
+// RapidFair: baseline collect发送交易序列（或交易序列哈希）给其他replica
 func (r *Replica) Collect(col hotstuff.CollectTxSeq) {
 	if r.node == nil {
 		return
@@ -68,6 +68,19 @@ func (r *Replica) Collect(col hotstuff.CollectTxSeq) {
 	cTxSeq := hotstuffpb.CollectToProto(col)
 	// 调用fairorder_gorums.pb.go的Collect()发送collect给其他节点，怎么确定发送给leader？
 	r.node.Collect(ctx, cTxSeq, gorums.WithNoSendWaiting())
+}
+
+// RapidFair: MultiCollect，replica发送消息给Leader
+func (r *Replica) MultiCollect(mc hotstuff.MultiCollectMsg) {
+	if r.node == nil {
+		return
+	}
+	var ctx context.Context
+	r.multiCollectCancel()
+	// 初始化collect的上下文
+	ctx, r.multiCollectCancel = context.WithCancel(context.Background())
+	// 调用fairorder_gorums.pb.go的Collect()发送collect给其他节点，怎么确定发送给leader？
+	r.node.MultiCollect(ctx, hotstuffpb.MultiCollectToProto(mc), gorums.WithNoSendWaiting())
 }
 
 // NewView sends the quorum certificate to the other replica.
@@ -225,12 +238,13 @@ func (cfg *Config) Connect(replicas []ReplicaInfo) (err error) {
 	for _, replica := range replicas {
 		// also initialize Replica structures
 		cfg.replicas[replica.ID] = &Replica{
-			id:            replica.ID,
-			pubKey:        replica.PubKey,
-			newViewCancel: func() {},
-			voteCancel:    func() {},
-			collectCancel: func() {}, // RapidFair: baseline新增collectCancel初始化
-			md:            make(map[string]string),
+			id:                 replica.ID,
+			pubKey:             replica.PubKey,
+			newViewCancel:      func() {},
+			voteCancel:         func() {},
+			collectCancel:      func() {}, // RapidFair: baseline新增collectCancel初始化
+			multiCollectCancel: func() {},
+			md:                 make(map[string]string),
 		}
 		// we do not want to connect to ourself
 		if replica.ID != cfg.subConfig.opts.ID() {
@@ -362,6 +376,30 @@ func (cfg *subConfig) ReadyCollect(rc hotstuff.ReadyCollectMsg) {
 	cfg.cfg.ReadyCollect(
 		cfg.synchronizer.ViewContext(),
 		hotstuffpb.ReadyCollectMsgToProto(rc),
+		gorums.WithNoSendWaiting(),
+	)
+}
+
+// RapidFair: 实现发送端广播collect消息给所有replica
+// func (cfg *subConfig) MultiCollect(mc hotstuff.MultiCollectMsg) {
+// 	if cfg.cfg == nil {
+// 		return
+// 	}
+// 	cfg.cfg.MultiCollect(
+// 		cfg.synchronizer.ViewContext(),
+// 		hotstuffpb.MultiCollectToProto(mc),
+// 		gorums.WithNoSendWaiting(),
+// 	)
+// }
+
+// RapidFair: 实现发送端leader广播PreNotify消息给所有replica
+func (cfg *subConfig) PreNotify(pn hotstuff.PreNotifyMsg) {
+	if cfg.cfg == nil {
+		return
+	}
+	cfg.cfg.PreNotify(
+		cfg.synchronizer.ViewContext(),
+		hotstuffpb.PreNotifyToProto(pn),
 		gorums.WithNoSendWaiting(),
 	)
 }

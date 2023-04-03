@@ -20,14 +20,17 @@ import (
 	"github.com/relab/hotstuff/crypto"
 	"github.com/relab/hotstuff/crypto/keygen"
 	"github.com/relab/hotstuff/eventloop"
+	"github.com/relab/hotstuff/fragmentchain"
 	"github.com/relab/hotstuff/internal/proto/orchestrationpb"
 	"github.com/relab/hotstuff/internal/protostream"
 	"github.com/relab/hotstuff/logging"
 	"github.com/relab/hotstuff/metrics"
 	"github.com/relab/hotstuff/metrics/types"
 	"github.com/relab/hotstuff/modules"
+	"github.com/relab/hotstuff/optimisticfairorder"
 	"github.com/relab/hotstuff/replica"
 	"github.com/relab/hotstuff/synchronizer"
+	"github.com/relab/hotstuff/tsfchain"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -199,25 +202,44 @@ func (w *Worker) createReplica(opts *orchestrationpb.ReplicaOpts) (*replica.Repl
 		float64(opts.GetTimeoutMultiplier()),
 	))
 
+	// RapidFair: 创建vsync同步器（初始时间间隔和consensus的同步器一致）
+	vsync := synchronizer.NewFairSync(synchronizer.NewViewDuration(
+		uint64(opts.GetTimeoutSamples()),
+		float64(opts.GetInitialTimeout().AsDuration().Nanoseconds())/float64(time.Millisecond),
+		float64(opts.GetMaxTimeout().AsDuration().Nanoseconds())/float64(time.Millisecond),
+		float64(opts.GetTimeoutMultiplier()),
+	))
+
 	// 在创建一个replica时，一次在builder里增加多个模块
 	builder.Add(
 		eventloop.New(1000), // 定死了eventloop的buffer只有1000个？一个replica
 		consensus.New(consensusRules),
 		consensus.NewVotingMachine(),     // 增加votemachine
-		consensus.NewCollectMachine(),    // 增加CollectMachine module
+		consensus.NewCollectMachine(),    // RapidFair:baseline 增加CollectMachine module
 		crypto.NewCache(cryptoImpl, 100), // TODO: consider making this configurable
 		leaderRotation,
 		sync,
 		w.metricsLogger, // 这里注册了metric的日志
 		blockchain.New(),
 		logging.New("hs"+strconv.Itoa(int(opts.GetID()))),
+		// RapidFair
+		fragmentchain.New(),
+		tsfchain.New(),
+		optimisticfairorder.New(),
+		vsync,
 	)
 
-	// RapidFair: baseline 设置是否使用fairorder, collect等
+	builder.Options().SetThemisGamma(opts.GetThemisGamma())
+	// RapidFair:baseline 设置是否使用Themis等
 	if opts.GetUseFairOrder() {
 		// builder.Add()
 		builder.Options().SetUseFairOrder()
-		builder.Options().SetThemisGamma(opts.GetThemisGamma())
+	}
+
+	// RapidFair: 如果使用rapidfair，则增加optimisticFairOrder,fairSynchronizer,fragmentChain,tsfChain模块
+	if opts.GetUseRapidFair() {
+		// 设置使用RapidFair
+		builder.Options().SetUseRapidFair()
 	}
 
 	builder.Options().SetSharedRandomSeed(opts.GetSharedSeed())

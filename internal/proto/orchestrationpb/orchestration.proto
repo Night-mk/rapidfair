@@ -54,10 +54,12 @@ message ReplicaOpts {
   
   // RapidFair: baseline 在orchestration中增加对Collect的配置(collect可能有多个版本，所以还是先设置成module来处理感觉比较好)
   string FairOrderCollect = 22;
-  // 增加对orderfairness协议的控制
+  // 增加对Themis协议的控制
   bool UseFairOrder = 23;
   // 增加Themis gamma参数 float32类型
   float ThemisGamma = 24;
+  // 增加对RapidFair协议的控制
+  bool UseRapidFair = 25;
 }
 
 // ReplicaInfo is the information that the replicas need about each other.

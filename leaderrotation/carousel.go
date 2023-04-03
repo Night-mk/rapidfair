@@ -32,6 +32,7 @@ func (c *carousel) InitModule(mods *modules.Core) {
 }
 
 func (c carousel) GetLeader(round hotstuff.View) hotstuff.ID {
+	// 返回consensus.bExec
 	commitHead := c.consensus.CommittedBlock()
 
 	if commitHead.QuorumCert().Signature() == nil {

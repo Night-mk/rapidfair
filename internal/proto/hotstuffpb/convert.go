@@ -135,15 +135,25 @@ func BlockToProto(block *hotstuff.Block) *Block {
 			fmt.Printf("[BlockToProto]: TxSeq serialization error: err=%v", err)
 		}
 	}
-	// RapidFair: END
+	// start := time.Now()
+	// elapsed := time.Since(start)
+	// fmt.Println("BlockToProto Marshal Execution time:", elapsed)
 
+	// RapidFair: 将FragmentData转为proto格式
+	fd := make([]*FragmentData, 0)
+	if len(block.FragmentData()) > 0 {
+		for _, v := range block.FragmentData() {
+			fd = append(fd, FragmentDataToProto(&v))
+		}
+	}
 	return &Block{
-		Parent:   parentHash[:],
-		Command:  []byte(block.Command()),
-		QC:       QuorumCertToProto(block.QuorumCert()),
-		View:     uint64(block.View()),
-		Proposer: uint32(block.Proposer()),
-		TxSeq:    txSeqB, // 增加TxSeq字段
+		Parent:       parentHash[:],
+		Command:      []byte(block.Command()),
+		QC:           QuorumCertToProto(block.QuorumCert()),
+		View:         uint64(block.View()),
+		Proposer:     uint32(block.Proposer()),
+		TxSeq:        txSeqB, // 增加TxSeq字段
+		FragmentData: fd,
 	}
 }
 
@@ -164,8 +174,30 @@ func BlockFromProto(block *Block) *hotstuff.Block {
 			txSeq[hotstuff.ID(k)] = hotstuff.Command(string(v))
 		}
 	}
-	// RapidFair: END
-	if len(txSeq) > 0 { // order-fairness block
+	// start := time.Now()
+	// elapsed := time.Since(start)
+	// fmt.Println("BlockFromProto Unmarshal Execution time:", elapsed)
+
+	// RapidFair 使用NewRapidFairBlock()构造block
+	fragDataProto := block.GetFragmentData()
+	if len(fragDataProto) > 0 {
+		// 将proto转为hotstuff.FragmentData类型
+		fragData := make([]hotstuff.FragmentData, 0)
+		for _, v := range fragDataProto {
+			fd := FragmentDataFromProto(v)
+			fragData = append(fragData, *fd)
+		}
+		return hotstuff.NewRapidFairBlock(
+			p,
+			QuorumCertFromProto(block.GetQC()),
+			hotstuff.Command(block.GetCommand()),
+			hotstuff.View(block.GetView()),
+			hotstuff.ID(block.GetProposer()),
+			fragData,
+		)
+	}
+
+	if len(txSeq) > 0 { // Themis block
 		return hotstuff.NewFairBlock(
 			p,
 			QuorumCertFromProto(block.GetQC()),
@@ -174,7 +206,7 @@ func BlockFromProto(block *Block) *hotstuff.Block {
 			hotstuff.ID(block.GetProposer()),
 			txSeq,
 		)
-	} else {
+	} else { // hotstuff block
 		return hotstuff.NewBlock(
 			p,
 			QuorumCertFromProto(block.GetQC()),
@@ -306,4 +338,106 @@ func ReadyCollectMsgFromProto(rc *ReadyCollectMsg) hotstuff.ReadyCollectMsg {
 	return hotstuff.ReadyCollectMsg{
 		ReadyCollect: hotstuff.NewReadyCollect(hotstuff.View(rc.GetView()), syncInfo),
 	}
+}
+
+// 将hotstuff.MultiCollect转为proto类型
+func MultiCollectToProto(mc hotstuff.MultiCollectMsg) *MCollect {
+	return &MCollect{
+		VirView: uint64(mc.MultiCollect.VirView()),
+		TxSeq:   []byte(mc.MultiCollect.TxSeq()),
+		PC:      PartialCertToProto(mc.MultiCollect.PartialCert()),
+	}
+}
+
+// 将proto转为hotstuff.MultiCollect类型
+func MultiCollectFromProto(mc *MCollect) hotstuff.MultiCollectMsg {
+	txSeq := hotstuff.Command(mc.GetTxSeq())
+	pc := PartialCertFromProto(mc.GetPC())
+	// return hotstuff.NewMultiCollect(hotstuff.View(mc.GetVirView()), txSeq, pc)
+	return hotstuff.MultiCollectMsg{
+		MultiCollect: hotstuff.NewMultiCollect(hotstuff.View(mc.GetVirView()), txSeq, pc),
+	}
+}
+
+// 将hotstuff.PreNotify转为proto类型
+func PreNotifyToProto(pn hotstuff.PreNotifyMsg) *PreNotifyMsg {
+	parentHash := pn.TxSeqFragment.Parent()
+	maphash := make(map[uint32][]byte)
+	if len(pn.TxSeqFragment.TxSeqHash()) > 0 {
+		for k, v := range pn.TxSeqFragment.TxSeqHash() {
+			maphash[uint32(k)] = []byte(v)
+		}
+	}
+
+	tsf := &TxSeqFragment{
+		Parent:    parentHash[:],
+		QC:        QuorumCertToProto(pn.TxSeqFragment.QuorumCert()),
+		VirView:   uint64(pn.TxSeqFragment.VirView()),
+		Leader:    uint32(pn.TxSeqFragment.VirLeader()),
+		TxSeqHash: maphash,
+	}
+
+	return &PreNotifyMsg{
+		TxSeqFragment: tsf,
+	}
+}
+
+// 将proto转为hotstuff.PreNotify类型
+func PreNotifyFromProto(pn *PreNotifyMsg) hotstuff.PreNotifyMsg {
+	tsh := make(hotstuff.TXList)
+	if len(pn.TxSeqFragment.GetTxSeqHash()) > 0 {
+		for k, v := range pn.TxSeqFragment.GetTxSeqHash() {
+			// var h hotstuff.Hash
+			// copy(h[:], v)
+			tsh[hotstuff.ID(k)] = hotstuff.Command(v)
+		}
+	}
+
+	tsf := pn.GetTxSeqFragment()
+	var parentHash hotstuff.Hash
+	copy(parentHash[:], tsf.GetParent())
+
+	return hotstuff.PreNotifyMsg{
+		TxSeqFragment: hotstuff.NewTxSeqFragment(
+			parentHash,
+			QuorumCertFromProto(tsf.GetQC()),
+			hotstuff.View(tsf.GetVirView()),
+			hotstuff.ID(tsf.GetLeader()),
+			tsh,
+		),
+	}
+}
+
+// RapidFair: 将hotstuff.FragmentData转为proto类型
+func FragmentDataToProto(fd *hotstuff.FragmentData) *FragmentData {
+	hash := fd.Hash()
+	txSeqHash := fd.TxSeq()
+	updateSeqHash := fd.UpdateSeq()
+
+	return &FragmentData{
+		Hash:      hash[:],
+		VirView:   uint64(fd.VirView()),
+		OrderedTx: []byte(fd.OrderedTx()),
+		TxSeq:     txSeqHash[:],
+		MissEdge:  []byte(fd.MissEdge()),
+		UpdateSeq: updateSeqHash[:],
+	}
+}
+
+// 将proto转为hotstuff.FragmentData类型
+func FragmentDataFromProto(fd *FragmentData) *hotstuff.FragmentData {
+	var (
+		txSeqHash     hotstuff.Hash
+		updateSeqHash hotstuff.Hash
+	)
+	copy(txSeqHash[:], fd.GetTxSeq())
+	copy(updateSeqHash[:], fd.GetUpdateSeq())
+
+	return hotstuff.NewFragmentData(
+		hotstuff.View(fd.GetVirView()),
+		hotstuff.Command(fd.GetOrderedTx()),
+		txSeqHash,
+		hotstuff.Command(fd.GetMissEdge()),
+		updateSeqHash,
+	)
 }

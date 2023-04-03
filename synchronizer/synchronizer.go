@@ -125,7 +125,11 @@ func (s *Synchronizer) Start(ctx context.Context) {
 	// start the initial proposal
 	// Leader首先提出genesisblock
 	if s.currentView == 1 && s.leaderRotation.GetLeader(s.currentView) == s.opts.ID() {
-		s.consensus.Propose(s.SyncInfo())
+		if s.opts.UseRapidFair() {
+			s.consensus.RapidFairPropose(s.SyncInfo())
+		} else {
+			s.consensus.Propose(s.SyncInfo())
+		}
 	}
 }
 
@@ -172,7 +176,7 @@ func (s *Synchronizer) OnLocalTimeout() {
 	// 本地超时的时候，先重置timer
 	s.timer.Reset(s.duration.Duration())
 
-	// 判断节点在当前view中否重复出现timeout：如果出现，则继续广播TimeoutMsg
+	// 判断节点在当前view中否重复出现timeout：如果出现，则继续广播上一个TimeoutMsg
 	//（1）s.lastTimeout不是nil说明在一个view中已经执行过timeout
 	//（2）如果s.lastTimeout的view和节点当前的view相等
 	if s.lastTimeout != nil && s.lastTimeout.View == s.currentView {
@@ -183,7 +187,7 @@ func (s *Synchronizer) OnLocalTimeout() {
 	// 下面的代码对节点在一个view中第一次出现timeout的情况做处理
 	s.duration.ViewTimeout() // increase the duration of the next view
 	view := s.currentView
-	s.logger.Debugf("OnLocalTimeout: %v", view)
+	s.logger.Debugf("OnLocalTimeout: View %v", view)
 
 	// 对view进行签名
 	sig, err := s.crypto.Sign(view.ToBytes())
@@ -216,14 +220,14 @@ func (s *Synchronizer) OnLocalTimeout() {
 
 	// 广播timeoutMsg消息
 	s.configuration.Timeout(timeoutMsg)
-	s.logger.Infof("Synchronizer: OnLocalTimeout() -> OnRemoteTimeout()")
+	s.logger.Debugf("Synchronizer: OnLocalTimeout() -> OnRemoteTimeout()")
 	s.OnRemoteTimeout(timeoutMsg)
 }
 
 // OnRemoteTimeout handles an incoming timeout from a remote replica.
 // 收到TimeoutMsg处理事件，只有Leader会处理？还是所有Replica都会处理？
 func (s *Synchronizer) OnRemoteTimeout(timeout hotstuff.TimeoutMsg) {
-	s.logger.Infof("Synchronizer: OnRemoteTimeout() -> run AdvanceView")
+	s.logger.Debugf("Synchronizer: OnRemoteTimeout() -> run AdvanceView")
 	// 在方法最后清空小于currentViwe的timeout消息
 	defer func() {
 		// cleanup old timeouts
@@ -381,20 +385,25 @@ func (s *Synchronizer) AdvanceView(syncInfo hotstuff.SyncInfo) {
 	// 先collect，之后再propose
 	leader := s.leaderRotation.GetLeader(s.currentView)
 	if leader == s.opts.ID() { // 如果当前节点是leader
-		s.logger.Infof("leader advanced to view %d", s.currentView)
+		s.logger.Debugf("leader advanced to view %d", s.currentView)
 		if s.opts.UseFairOrder() {
 			s.logger.Debugf("[FairOrder] AdvanceView(): View in synchronizer: %d", s.currentView)
 			// leader广播ReadyCollect通知replicas可以发送txSeq
 			s.col.ReadyCollect(syncInfo)
+		} else if s.opts.UseRapidFair() {
+			// RapidFair推进view的时候调用RapidFairPropose方法
+			s.consensus.RapidFairPropose(syncInfo)
 		} else {
-			s.consensus.Propose(syncInfo) // 推进view的时候leader节点就直接调用propose方法了
+			// hotstuff推进view的时候leader节点就直接调用propose方法了
+			s.consensus.Propose(syncInfo)
 		}
 	} else if replica, ok := s.configuration.Replica(leader); ok {
 		s.logger.Debugf("Replica advanced to view %d", s.currentView)
 		replica.NewView(syncInfo) // 这里调用了./backend/config.go中的NewView
 	}
-	// fmt.Println("New Advanced View duration:", duration)
 }
+
+// RapidFair: 新增针对virtual view的推进协议；synchronizer同时维护consensus的view和fair-order的virtual view
 
 // updateHighQC attempts to update the highQC, but does not verify the qc first.
 // This method is meant to be used instead of the exported UpdateHighQC internally
@@ -431,6 +440,12 @@ func (s *Synchronizer) newCtx(duration time.Duration) {
 	s.cancelCtx()
 	s.viewCtx, s.cancelCtx = context.WithTimeout(context.Background(), duration)
 }
+
+// RapidFair: 增加对virtual view，context的管理
+// func (s *Synchronizer) newVirCtx(duration time.Duration) {
+// 	s.cancelCtx()
+// 	s.virViewCtx, s.cancelVirCtx = context.WithTimeout(context.Background(), duration)
+// }
 
 var _ modules.Synchronizer = (*Synchronizer)(nil)
 

@@ -57,6 +57,7 @@ func (t *Throughput) InitModule(mods *modules.Core) {
 func (t *Throughput) recordCommit(commands int) {
 	t.commitCount++
 	t.commandCount += uint64(commands)
+	// fmt.Println("CommitEvent: total commit tx num: ", t.commandCount)
 }
 
 func (t *Throughput) tick(tick types.TickEvent) {

@@ -94,6 +94,7 @@ func (chain *blockChain) Get(hash hotstuff.Hash) (block *hotstuff.Block, ok bool
 
 	chain.mut.Unlock()
 	chain.logger.Debugf("Attempting to fetch block: %.8s", hash)
+	chain.logger.Infof("Attempting to fetch block: %.8s", hash)
 	block, ok = chain.configuration.Fetch(ctx, hash)
 	chain.mut.Lock()
 

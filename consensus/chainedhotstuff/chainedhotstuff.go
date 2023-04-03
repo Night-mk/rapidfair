@@ -44,6 +44,7 @@ func (hs *ChainedHotStuff) qcRef(qc hotstuff.QuorumCert) (*hotstuff.Block, bool)
 
 // CommitRule decides whether an ancestor of the block should be committed.
 func (hs *ChainedHotStuff) CommitRule(block *hotstuff.Block) *hotstuff.Block {
+	hs.logger.Debug("====================CommitRule Getting block")
 	block1, ok := hs.qcRef(block.QuorumCert())
 	if !ok {
 		return nil
@@ -80,13 +81,14 @@ func (hs *ChainedHotStuff) CommitRule(block *hotstuff.Block) *hotstuff.Block {
 func (hs *ChainedHotStuff) VoteRule(proposal hotstuff.ProposeMsg) bool {
 	block := proposal.Block
 
+	// hs.logger.Infof("====================OnPropose: VoteRule")
 	qcBlock, haveQCBlock := hs.blockChain.Get(block.QuorumCert().BlockHash())
 
 	safe := false
 	if haveQCBlock && qcBlock.View() > hs.bLock.View() {
 		safe = true
 	} else {
-		hs.logger.Debug("====================OnPropose: liveness condition failed")
+		// hs.logger.Debug("====================OnPropose: liveness condition failed")
 		// check if this block extends bLock
 		if hs.blockChain.Extends(block, hs.bLock) {
 			safe = true

@@ -78,7 +78,7 @@ loop:
 			select {
 			case <-el.eventQ.ready():
 				continue loop
-			case <-ctx.Done():
+			case <-ctx.Done(): // replica调用Stop()取消上下文时，停止loop，结束Run()函数
 				break loop
 			}
 		}

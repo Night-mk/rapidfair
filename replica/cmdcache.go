@@ -3,6 +3,7 @@ package replica
 import (
 	"container/list"
 	"context"
+	"crypto/sha256"
 	"sync"
 
 	"github.com/relab/hotstuff"
@@ -30,6 +31,10 @@ type cmdCache struct {
 	proposedCache     map[hotstuff.TxID]int               // RapidFair:baseline 存储对所有已提交交易的缓存（无序）
 	currentBatchCache map[hotstuff.TxID]*clientpb.Command // RapidFair:baseline 存储对当前读取的所有txBatch的缓存
 	currentBatchTxId  []hotstuff.TxID                     // 按顺序存储加入到txBatch的交易
+	fragmentTxCache   map[hotstuff.TxID]int               // RapidFair: 存储当前已经构建fragment但是没有构建QC，且没有提交到block的交易集合
+	highFragVirView   hotstuff.View                       // 记录当前最高的Fragment的virView
+	fragList          list.List                           // 缓存写入cmdcache的Fragment
+	canGetFrag        chan struct{}                       // 用channel控制是否能从cmdcahe中读取Fragment
 }
 
 func newCmdCache(batchSize int) *cmdCache {
@@ -40,6 +45,9 @@ func newCmdCache(batchSize int) *cmdCache {
 		proposedCache:     make(map[hotstuff.TxID]int),
 		currentBatchCache: make(map[hotstuff.TxID]*clientpb.Command),
 		currentBatchTxId:  make([]hotstuff.TxID, 0),
+		fragmentTxCache:   make(map[hotstuff.TxID]int),
+		highFragVirView:   0,
+		canGetFrag:        make(chan struct{}),
 		marshaler:         proto.MarshalOptions{Deterministic: true},
 		unmarshaler:       proto.UnmarshalOptions{DiscardUnknown: true},
 	}
@@ -183,12 +191,24 @@ awaitBatch:
 			uint64 SequenceNumber = 2;
 			bytes Data = 3;
 		}*/
-		// 计算交易的TxID
-		// 判断cmd的seqnum是否已经提交，如果已经提交，则不会加入这个交易进入batch
+		// 判断什么交易可以加入到当前的Batch
+		// 1. 判断cmd的seqnum是否已经提交，如果已经提交，则不会加入这个交易进入batch
 		txId := hotstuff.NewTxID(cmd.GetClientID(), cmd.GetSequenceNumber())
 		if _, ok := c.proposedCache[txId]; ok {
 			i--
 			continue
+		}
+		// 2. RapidFair额外判断cmd是否提交到fragment但是还没提交到Block，这种交易也不能加入到当前batch
+		if _, ok := c.fragmentTxCache[txId]; ok {
+			i--
+			continue
+		}
+		// 将没有重复的交易cmd加入到batch中
+		// RapidFair优化：交易的data field只用计算hash，之后加入batch
+		if c.opts.UseRapidFair() || c.opts.UseFairOrder() { // Themis优化后，data进行hash之后传输
+			// if c.opts.UseRapidFair() { // Themis优化前
+			dataHash := sha256.Sum256(cmd.Data)
+			cmd.Data = dataHash[:]
 		}
 		batch.Commands = append(batch.Commands, cmd)
 		c.currentBatchCache[txId] = cmd
@@ -210,7 +230,6 @@ awaitBatch:
 		c.logger.Errorf("Failed to marshal batch: %v", err)
 		return "", false
 	}
-
 	// 将序列化后的batch数据，再转变为hotstuff.Command类型
 	cmd = hotstuff.Command(b)
 	return cmd, true
@@ -232,7 +251,7 @@ func (c *cmdCache) Accept(cmd hotstuff.Command) bool {
 
 	// RapidFair: baseline 原本hotstuff这里判断序列号可能存在问题，因为可能存在一些低序列号的交易无法在当前block提交，并延后到下一个或几个block中才能提交
 	// RapidFair: baseline 公平排序里暂时先放弃判断
-	if !c.opts.UseFairOrder() {
+	if !c.opts.UseFairOrder() && !c.opts.UseRapidFair() {
 		for _, cmd := range batch.GetCommands() {
 			if serialNo := c.serialNumbers[cmd.GetClientID()]; serialNo >= cmd.GetSequenceNumber() {
 				// command is too old, can't accept
@@ -287,7 +306,136 @@ func (c *cmdCache) Proposed(cmd hotstuff.Command) {
 		c.currentBatchCache = make(map[hotstuff.TxID]*clientpb.Command, 0)
 		c.currentBatchTxId = make([]hotstuff.TxID, 0)
 	}
-	// RapidFair END
+
+	// RapidFair: 将已经提交到fragmentTxCache的交易也提交到Block（加入proposedCache）
+	// if len(c.fragmentTxCache) > 0 {
+	// 	for k := range c.fragmentTxCache {
+	// 		c.proposedCache[k] = 1
+	// 	}
+	// 	c.fragmentTxCache = make(map[hotstuff.TxID]int, 0)
+	// }
+	// RapidFair: baseline END
+}
+
+// RapidFair: optimisticfairorder中，replica将当前提交到Fragment的交易加入到fragmentTxCache
+func (c *cmdCache) ProposedFragment(cmd hotstuff.Command) {
+	batch := new(clientpb.Batch)
+	err := c.unmarshaler.Unmarshal([]byte(cmd), batch)
+	if err != nil {
+		c.logger.Errorf("Failed to unmarshal batch: %v", err)
+		return
+	}
+
+	c.mut.Lock()
+	defer c.mut.Unlock()
+	/*
+		curKeys := make([]hotstuff.TxID, 0)
+		fragKeys := make([]hotstuff.TxID, 0)
+		if len(c.currentBatchCache) > 0 {
+			for k := range c.currentBatchCache {
+				curKeys = append(curKeys, k)
+			}
+		}
+	*/
+	for _, cmd := range batch.GetCommands() {
+		txId := hotstuff.NewTxID(cmd.GetClientID(), cmd.GetSequenceNumber())
+		c.fragmentTxCache[txId] = 1
+		delete(c.currentBatchCache, txId)
+		// fragKeys = append(fragKeys, txId)
+	}
+	// fmt.Println("currentBatchCache: ", curKeys)
+	// fmt.Println("ProposedFragment: ", fragKeys)
+	// c.logger.Infof("==============[ProposedFragment]: Fragment command len: %d, currentBatchCache len: %d==============", len(batch.GetCommands()), len(c.currentBatchCache))
+
+	// RapidFair: 将没有提交成功的交易应该按顺序再放回c.cache
+	if len(c.currentBatchCache) > 0 {
+		c.logger.Infof("==============[ProposedFragment]: Need reinput the transactions==============")
+		// 对在batch中但是没有在block.data中的交易，按从后往前的顺序从前面加入回cache中
+		for i := len(c.currentBatchTxId) - 1; i >= 0; i-- {
+			if _, ok := c.currentBatchCache[c.currentBatchTxId[i]]; ok {
+				c.cache.PushFront(c.currentBatchCache[c.currentBatchTxId[i]])
+			}
+		}
+		// 重置currentBatchCache
+		c.currentBatchCache = make(map[hotstuff.TxID]*clientpb.Command, 0)
+		c.currentBatchTxId = make([]hotstuff.TxID, 0)
+	}
+}
+
+// RapidFair: 共识节点对提交到Block中的交易，更新proposedCache
+func (c *cmdCache) ProposedBlock(cmd hotstuff.Command) {
+	batch := new(clientpb.Batch)
+	err := c.unmarshaler.Unmarshal([]byte(cmd), batch)
+	if err != nil {
+		c.logger.Errorf("Failed to unmarshal batch: %v", err)
+		return
+	}
+
+	c.mut.Lock()
+	defer c.mut.Unlock()
+
+	c.logger.Infof("==============[ProposedBlock]: QC Block command len: %d==============", len(batch.GetCommands()))
+	for _, cmd := range batch.GetCommands() {
+		txId := hotstuff.NewTxID(cmd.GetClientID(), cmd.GetSequenceNumber())
+		c.proposedCache[txId] = 1
+		// 提出一个新block之后，就应该删除对应的fragment缓存中的交易
+		delete(c.fragmentTxCache, txId)
+	}
+}
+
+// RapidFair: AddFragment用于optimisticfairorder将Fragment加入fragList链表
+func (c *cmdCache) AddFragment(fragment *hotstuff.Fragment) {
+	c.mut.Lock()
+	defer c.mut.Unlock()
+
+	if c.highFragVirView >= fragment.VirView() {
+		// 该fragment的virtual view已经提交过了
+		return
+	}
+	// 将fragment写入list
+	c.fragList.PushBack(fragment)
+	if c.fragList.Len() > 0 {
+		// c.logger.Infof("[AddFragment]: Have added fragment in nodeID: %d", c.opts.ID())
+		// 通知GetFragment方法已经写入了新Fragment,可以开始读取到block中
+		select {
+		case c.canGetFrag <- struct{}{}:
+		default:
+		}
+	}
+}
+
+// RapidFair: 共识模块中leader从FragmentChain中记录的Fragments中获取有序交易
+// 这里ctx是consensus的上下文
+func (c *cmdCache) GetFragment(ctx context.Context) (fragments []*hotstuff.Fragment, ok bool) {
+	c.logger.Debugf("[GetFragment]: nodeID: %d", c.opts.ID())
+	c.mut.Lock()
+	// fragments := make([]*hotstuff.Fragment, 0)
+	// 等待条件，至少等待1个fragment，fragment数量不超过batchSize
+	for c.fragList.Len() <= 0 {
+		c.mut.Unlock()
+		select { // select 能够让 Goroutine 同时等待多个 Channel 可读或者可写
+		case <-c.canGetFrag:
+		case <-ctx.Done():
+			return
+		}
+		c.mut.Lock()
+	}
+	// c.logger.Infof("[GetFragment]: Have Fragment nodeID: %d", c.opts.ID())
+	// 如果只有一个fragment，则可以直接返回fragment的交易部分
+	// 从fragment中读取交易并加入到batch中
+	for i := 0; i < c.fragList.Len(); i++ {
+		elem := c.fragList.Front()
+		if elem == nil {
+			break
+		}
+		c.fragList.Remove(elem) // 从list里删除fragment
+		f := elem.Value.(*hotstuff.Fragment)
+		fragments = append(fragments, f)
+	}
+
+	defer c.mut.Unlock()
+
+	return fragments, true
 }
 
 var _ modules.Acceptor = (*cmdCache)(nil)

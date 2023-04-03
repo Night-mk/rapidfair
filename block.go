@@ -17,6 +17,7 @@ type Block struct {
 	cert     QuorumCert
 	view     View
 	txSeq    map[ID]Command // RapidFair:baseline 增加txSeq字段，存储quorum节点的交易序列
+	fragData []FragmentData // RapidFair: 增加fragment字段，存储一个或多个fragment
 }
 
 // NewBlock creates a new Block
@@ -28,6 +29,7 @@ func NewBlock(parent Hash, cert QuorumCert, cmd Command, view View, proposer ID)
 		view:     view,
 		proposer: proposer,
 		txSeq:    make(map[ID]Command),
+		fragData: make([]FragmentData, 0),
 	}
 	// cache the hash immediately because it is too racy to do it in Hash()
 	b.hash = sha256.Sum256(b.ToBytes())
@@ -43,6 +45,22 @@ func NewFairBlock(parent Hash, cert QuorumCert, cmd Command, view View, proposer
 		view:     view,
 		proposer: proposer,
 		txSeq:    txSeq,
+		fragData: make([]FragmentData, 0),
+	}
+	// cache the hash immediately because it is too racy to do it in Hash()
+	b.hash = sha256.Sum256(b.ToBytes())
+	return b
+}
+
+func NewRapidFairBlock(parent Hash, cert QuorumCert, cmd Command, view View, proposer ID, fragData []FragmentData) *Block {
+	b := &Block{
+		parent:   parent,
+		cert:     cert,
+		cmd:      cmd,
+		view:     view,
+		proposer: proposer,
+		txSeq:    make(map[ID]Command),
+		fragData: fragData,
 	}
 	// cache the hash immediately because it is too racy to do it in Hash()
 	b.hash = sha256.Sum256(b.ToBytes())
@@ -95,6 +113,10 @@ func (b *Block) TxSeq() map[ID]Command {
 	return b.txSeq
 }
 
+func (b *Block) FragmentData() []FragmentData {
+	return b.fragData
+}
+
 // ToBytes returns the raw byte form of the Block, to be used for hashing, etc.
 // block数据结构中预制了ToBytes()函数将Block结构序列化，用于计算哈希值
 func (b *Block) ToBytes() []byte {
@@ -113,5 +135,9 @@ func (b *Block) ToBytes() []byte {
 		fmt.Printf("[Block.ToBytes()]: TxSeq serialization error: err=%v", err)
 	}
 	buf = append(buf, txSeqB...)
+	// 增加FragmentData的序列化
+	for _, v := range b.fragData {
+		buf = append(buf, v.ToBytes()...)
+	}
 	return buf
 }

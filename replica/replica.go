@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"fmt"
 	"net"
 
 	"github.com/relab/hotstuff/eventloop"
@@ -57,6 +58,9 @@ type Replica struct {
 	execHandlers map[cmdID]func(*emptypb.Empty, error)
 	cancel       context.CancelFunc
 	done         chan struct{}
+
+	// RapidFair: 增加对fairSynchronizer的上下文取消方法
+	// fairSyncCancel context.CancelFunc
 }
 
 // New returns a new replica.
@@ -75,7 +79,8 @@ func New(conf Config, builder modules.Builder) (replica *Replica) {
 		clientSrv:    clientSrv,
 		execHandlers: make(map[cmdID]func(*emptypb.Empty, error)), // 这个参数就初始化用了？
 		cancel:       func() {},
-		done:         make(chan struct{}),
+		// fairSyncCancel: func() {}, // RapidFair
+		done: make(chan struct{}),
 	}
 
 	replicaSrvOpts := conf.ReplicaServerOptions
@@ -136,29 +141,54 @@ func (srv *Replica) Connect(replicas []backend.ReplicaInfo) error {
 func (srv *Replica) Start() {
 	var ctx context.Context
 	ctx, srv.cancel = context.WithCancel(context.Background())
+
+	// RapidFair:为启动fairSynchronizer创建新的上下文
+	// var fairSyncCtx context.Context
+	// fairSyncCtx, srv.fairSyncCancel = context.WithCancel(context.Background())
+
 	go func() {
-		srv.Run(ctx)
-		close(srv.done)
+		srv.RunFairSync(ctx)
+	}()
+
+	go func() {
+		srv.Run(ctx)    // Run方法会被eventloop持续阻塞
+		close(srv.done) // 结束Run()之后关闭通道
 	}()
 }
 
 // Stop stops the replica and closes connections.
 func (srv *Replica) Stop() {
-	srv.cancel()
-	<-srv.done
+	srv.cancel() // 调用cancel()取消上下文
+	// srv.fairSyncCancel() // RapidFair: 停止fairSynchronizer
+	<-srv.done // 如果channel中没有值，则会阻塞后续语句；channel关闭后，读取channel不会阻塞；因此在确定调用了close(srv.done)之后，这里才能继续执行后续的srv.Close()方法
 	srv.Close()
 }
 
 // Run runs the replica until the context is cancelled.
+// 这里的ctx用于控制synchronizer和eventLoop的整体生命周期？
 func (srv *Replica) Run(ctx context.Context) {
 	var (
 		synchronizer modules.Synchronizer
 		eventLoop    *eventloop.EventLoop
 	)
 	srv.hs.Get(&synchronizer, &eventLoop)
-
 	synchronizer.Start(ctx)
+	// eventloop的方法会持续循环执行，阻塞；使得Start中的协程可以一直运行？
+	fmt.Println("===========================CAN RUN EVENTLOOP===========================")
 	eventLoop.Run(ctx)
+}
+
+// RapidFair:
+func (srv *Replica) RunFairSync(ctx context.Context) {
+	var opts *modules.Options
+	srv.hs.Get(&opts)
+	// RapidFair: 启动fairSynchronizer【两个同步器是不是不应该使用同一个上下文？】
+	if opts.UseRapidFair() {
+		fmt.Println("===========================CAN RUN fairSynchronizer===========================")
+		var fairSynchronizer modules.FairSynchronizer
+		srv.hs.Get(&fairSynchronizer)
+		fairSynchronizer.Start(ctx)
+	}
 }
 
 // Close closes the connections and stops the servers used by the replica.

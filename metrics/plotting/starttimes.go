@@ -7,6 +7,7 @@ import (
 )
 
 // StartTimes collects the start times for each client or replica.
+// 按client, replica ID收集开始时间
 type StartTimes struct {
 	clients  map[uint32]time.Time
 	replicas map[uint32]time.Time
@@ -44,6 +45,7 @@ func (s *StartTimes) Client(id uint32) (t time.Time, ok bool) {
 func (s *StartTimes) ClientOffset(id uint32, t time.Time) (offset time.Duration, ok bool) {
 	startTime, ok := s.clients[id]
 	if !ok {
+		// fmt.Println("ClientOffset failed")
 		return 0, false
 	}
 	return t.Sub(startTime), true

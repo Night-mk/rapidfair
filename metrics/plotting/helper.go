@@ -46,6 +46,7 @@ func GonumPlot(filename, xlabel, ylabel string, f func(plt *plot.Plot) error) er
 // MeasurementMap is a map that stores lists Measurement objects associated
 // with the ID of the client/replica where they where taken.
 // map(ID -> Measurement), Measurement是一个interface
+// 存储每个replica/client的Measurement结果数组
 type MeasurementMap struct {
 	m map[uint32][]Measurement
 }
@@ -80,6 +81,7 @@ type Measurement interface {
 			bool Client = 2;
 			google.protobuf.Timestamp Timestamp = 3;
 		}*/
+	// 返回一个对象的事件类型
 	GetEvent() *types.Event
 }
 
@@ -91,12 +93,17 @@ type MeasurementGroup struct {
 
 // GroupByTimeInterval merges all measurements from all client/replica ids into groups based on the time interval that
 // the measurement was taken in. The StartTimes object is used to calculate which time interval a measurement falls in.
+// GroupByTimeInterval 根据测量的time interval将来自所有client,replica ID 的所有测试结果合并到组中
+// StartTimes 对象用于计算测试结果属于哪个time interval
 func GroupByTimeInterval(startTimes *StartTimes, m MeasurementMap, interval time.Duration) []MeasurementGroup {
 	var (
 		indices     = make([]int, m.NumIDs()) // the index within each client/replica measurement list
 		groups      []MeasurementGroup        // the groups we are creating
 		currentTime time.Duration             // the start of the current time interval
 	)
+	for k, measurements := range m.m {
+		fmt.Printf("MeasurementMap.m[ID=%d] len: %d\n", k, len(measurements))
+	}
 	for {
 		var (
 			i         int                                   // index into indices
@@ -113,8 +120,10 @@ func GroupByTimeInterval(startTimes *StartTimes, m MeasurementMap, interval time
 					// add it to the group and move to the next measurement
 					group.Measurements = append(group.Measurements, m)
 					indices[i]++
+					// fmt.Println("success append")
 				} else {
 					// the measurement will be processed later
+					// fmt.Println("the measurement will be processed later")
 					break
 				}
 			}
@@ -123,6 +132,7 @@ func GroupByTimeInterval(startTimes *StartTimes, m MeasurementMap, interval time
 		if len(group.Measurements) > 0 {
 			groups = append(groups, group)
 		}
+		// fmt.Println("remaining len: ", remaining)
 		if remaining <= 0 {
 			break
 		}
@@ -143,38 +153,82 @@ type MeasurementGroup struct {
 }*/
 func TimeAndAverage(groups []MeasurementGroup, getValue func(Measurement) (float64, uint64)) plotter.XYer {
 	points := make(xyer, 0, len(groups))
-	// 计算tps/latency所有数据的均值
-	var allavg float64
+	// RapidFair: 计算tps/latency所有数据的均值
 	finavg := float64(0)
+	all_sum := float64(0)          // 计算所有测量值的总和
+	all_num := uint64(0)           // 计算所有测量结果的数量
+	all_blockLatency := float64(0) // 计算所有blockLatency的总和
+	finavg_blockLatency := float64(0)
+	// 【在后续多server上部署的时候可能需要修改！！】 希望去掉偏离比较大的前k个结果，通常是前3个区块的结果
+	badResultBlocks := uint64(3)
+	nodeNum := uint64(5)
+	// throughput每次计算的groups长度都不同？
+	// fmt.Println("groups len: ", len(groups))
 	for _, group := range groups { // 每个group计算一次x,y顶点的值,总共len(group)组顶点
 		var (
 			sum float64
 			num uint64
 		)
+		// fmt.Println("group.Measurements len: ", len(group.Measurements))
 		for _, measurement := range group.Measurements {
 			// throughput调用次方法时，v表tps=command/duration, n是数量（每个replica节点的数据代表1）
+			// 不同函数调用TimeAndAverage时，getValue会返回不同的内容
 			v, n := getValue(measurement)
+			// 不用考虑为0的值？（Themis, RapidFair）
+			if v == float64(0) {
+				continue
+			}
 			sum += v * float64(n) // sum表示累积的command，latency总和
 			num += n
+
+			// RapidFair
+			switch measurement.(type) {
+			case *types.LatencyMeasurement:
+				all_num += 1 // latency这里拿到v本来就是均值，所以是不是乘n无所谓
+				if all_num > badResultBlocks {
+					all_sum += v
+				}
+			case *types.ThroughputMeasurement:
+				// 计算区块延迟
+				all_num += n
+				if all_num > badResultBlocks*nodeNum {
+					all_sum += v * float64(n)
+					blockLatency := GetBlockLatency(measurement)
+					all_blockLatency += blockLatency
+				}
+			}
 		}
+
 		if num > 0 {
 			points = append(points, point{
 				x: group.Time.Seconds(),
 				y: sum / float64(num),
 			})
-			allavg += sum / float64(num)
+			// allavg += sum / float64(num)
 		}
 	}
 	// RapidFair 新增：计算所有type的measurement数据的均值（只有tps和latency）
 	if len(groups) > 0 {
-		finavg = allavg / float64(len(groups))
+		// finavg = allavg / float64(len(groups))
+		fmt.Println("ALL num: ", all_num)
+
 		if len(groups[0].Measurements) > 0 {
 			m := groups[0].Measurements[0]
 			switch m.(type) {
 			case *types.LatencyMeasurement:
-				fmt.Printf("avg latency: %.4f ms\n", finavg)
+				// 这里只能计算端到端的平均延迟
+				num := all_num - badResultBlocks
+				finavg = all_sum / float64(num)
+				fmt.Println("latency num: ", num)
+				fmt.Printf("avg end-to-end latency(client): %.4f ms\n", finavg)
 			case *types.ThroughputMeasurement:
+				num := all_num - badResultBlocks*nodeNum
+				finavg = all_sum / float64(num)
+				finavg_blockLatency = all_blockLatency / float64(num)
+				fmt.Println("")
+				fmt.Println("tps num: ", num)
 				fmt.Printf("avg tps: %.4f tx/s\n", finavg)
+				fmt.Printf("avg block latency: %.4f ms, avg hotstuff latency: %.4f ms\n", finavg_blockLatency, finavg_blockLatency*3)
 			}
 		}
 	}

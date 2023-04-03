@@ -9,6 +9,7 @@ import (
 type crypto struct {
 	blockChain    modules.BlockChain
 	configuration modules.Configuration
+	tsfChain      modules.TSFChain // RapidChain 增加TxSeqFragmentChain
 
 	modules.CryptoBase
 }
@@ -25,6 +26,7 @@ func (c *crypto) InitModule(mods *modules.Core) {
 	mods.Get(
 		&c.blockChain,
 		&c.configuration,
+		&c.tsfChain,
 	)
 
 	if mod, ok := c.CryptoBase.(modules.Module); ok {
@@ -96,6 +98,7 @@ func (c crypto) CreateAggregateQC(view hotstuff.View, timeouts []hotstuff.Timeou
 
 // VerifyPartialCert verifies a single partial certificate.
 func (c crypto) VerifyPartialCert(cert hotstuff.PartialCert) bool {
+	// fmt.Println("VerifyPartialCert======================")
 	block, ok := c.blockChain.Get(cert.BlockHash())
 	if !ok {
 		return false
@@ -153,4 +156,60 @@ func (c crypto) VerifyAggregateQC(aggQC hotstuff.AggregateQC) (highQC hotstuff.Q
 		return highQC, true
 	}
 	return hotstuff.QuorumCert{}, false
+}
+
+// RapidChain: 实现对TxSeqFragment的阈值签名相关方法
+// CreatePartialCertTSF signs a single TxSeqFragment and returns the partial certificate.
+func (c crypto) CreatePartialCertTSF(tsf *hotstuff.TxSeqFragment) (cert hotstuff.PartialCert, err error) {
+	sig, err := c.Sign(tsf.ToBytes())
+	if err != nil {
+		return hotstuff.PartialCert{}, err
+	}
+	return hotstuff.NewPartialCert(sig, tsf.Hash()), nil
+}
+
+// 创建TxSeqFragment的聚合签名
+// CreateQuorumCertTSF creates a quorum certificate from a list of partial certificates (TxSeqFragment).
+func (c crypto) CreateQuorumCertTSF(tsf *hotstuff.TxSeqFragment, signatures []hotstuff.PartialCert) (cert hotstuff.QuorumCert, err error) {
+	// genesis QC is always valid.
+	if tsf.Hash() == hotstuff.GetGenesisTSF().Hash() {
+		return hotstuff.NewQuorumCert(nil, 0, hotstuff.GetGenesisTSF().Hash()), nil
+	}
+	sigs := make([]hotstuff.QuorumSignature, 0, len(signatures))
+	for _, sig := range signatures {
+		sigs = append(sigs, sig.Signature())
+	}
+	sig, err := c.Combine(sigs...)
+	if err != nil {
+		return hotstuff.QuorumCert{}, err
+	}
+	return hotstuff.NewQuorumCert(sig, tsf.VirView(), tsf.Hash()), nil
+}
+
+// 验证TxSeqFragment部分签名
+// VerifyPartialCertTSF verifies a single partial certificate (TxSeqFragment).
+func (c crypto) VerifyPartialCertTSF(cert hotstuff.PartialCert) bool {
+	tsf, ok := c.tsfChain.Get(cert.BlockHash()) // 这里cert.BlockHash()就是指的TxSeqFragment的hash值
+	if !ok {
+		return false
+	}
+	return c.Verify(cert.Signature(), tsf.ToBytes())
+}
+
+// 验证TxSeqFragment聚合签名
+// VerifyPartialCertTSF verifies a quorum certificate for (TxSeqFragment).
+func (c crypto) VerifyQuorumCertTSF(qc hotstuff.QuorumCert) bool {
+	// genesis QC is always valid.
+	if qc.BlockHash() == hotstuff.GetGenesisTSF().Hash() {
+		return true
+	}
+	// 这里要对比QuorumSizeFair()，要达到公平排序的恶意节点需求？
+	if qc.Signature().Participants().Len() < c.configuration.QuorumSizeFair() {
+		return false
+	}
+	tsf, ok := c.tsfChain.Get(qc.BlockHash())
+	if !ok {
+		return false
+	}
+	return c.Verify(qc.Signature(), tsf.ToBytes())
 }

@@ -74,6 +74,7 @@ func (srv *clientSrv) Stop() {
 	srv.srv.Stop()
 }
 
+// replica接收client使用./internal/proto/clientpb/client_gorums.pb.go->ExecCommand()发送的消息，并在本地处理，即加入cmdcache
 func (srv *clientSrv) ExecCommand(ctx gorums.ServerCtx, cmd *clientpb.Command) (*emptypb.Empty, error) {
 	id := cmdID{cmd.ClientID, cmd.SequenceNumber}
 
@@ -95,6 +96,7 @@ func (srv *clientSrv) Exec(cmd hotstuff.Command) {
 	batch := new(clientpb.Batch)
 	err := proto.UnmarshalOptions{AllowPartial: true}.Unmarshal([]byte(cmd), batch)
 	if err != nil {
+		srv.logger.Infof("Failed to unmarshal command: %v", err)
 		srv.logger.Errorf("Failed to unmarshal command: %v", err)
 		return
 	}

@@ -157,12 +157,14 @@ func (c *Client) Run(ctx context.Context) {
 	c.logger.Info("Starting to send commands")
 
 	commandStatsChan := make(chan stats)
+	// 启动一个goroutine处理共识系统返回给client的交易
 	// start the command handler
 	go func() {
 		executed, failed, timeout := c.handleCommands(ctx)
 		commandStatsChan <- stats{executed, failed, timeout}
 	}()
 
+	// client持续发送交易
 	err := c.sendCommands(ctx)
 	if err != nil && !errors.Is(err, io.EOF) {
 		c.logger.Panicf("Failed to send commands: %v", err)
@@ -266,14 +268,14 @@ loop:
 
 		num++
 		select {
-		case c.pendingCmds <- pending: // 将等待的交易写入通道
+		case c.pendingCmds <- pending: // 将等待的交易写入通道c.pendingCmds
 		case <-ctx.Done():
 			break loop
 		}
 		// 每个循环只发一个消息
 		if num%1000 == 0 {
-			c.logger.Infof("%d commands sent", num)
-			c.logger.Infof("payloadSize: %d", c.payloadSize)
+			c.logger.Debugf("%d commands sent", num)
+			// c.logger.Infof("payloadSize: %d", c.payloadSize)
 		}
 
 	}
@@ -290,7 +292,7 @@ func (c *Client) handleCommands(ctx context.Context) (executed, failed, timeout 
 			ok  bool
 		)
 		select {
-		case cmd, ok = <-c.pendingCmds: // 从通道中读取交易
+		case cmd, ok = <-c.pendingCmds: // 从通道c.pendingCmds中读取交易
 			if !ok {
 				return
 			}

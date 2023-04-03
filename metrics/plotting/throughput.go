@@ -71,11 +71,28 @@ func (p *ThroughputPlot) PlotAverage(filename string, measurementInterval time.D
 }
 
 // 返回绘制的X，Y轴的值
+// 这里interval在配置文件里定义，一般是取1 second
 func avgThroughput(p *ThroughputPlot, interval time.Duration) plotter.XYer {
+	fmt.Println("call avgThroughput")
+	// Themis实现在GroupByTimeInterval函数计算里有问题？
 	intervals := GroupByTimeInterval(&p.startTimes, p.measurements, interval)
+
 	return TimeAndAverage(intervals, func(m Measurement) (float64, uint64) {
+		// tp将m强制转为ThroughputMeasurement类型
 		tp := m.(*types.ThroughputMeasurement)
-		// 这里返回的就是TPS，commandNum/duration（时间单位是秒,s）
+		// 这里返回的就是TPS，commandNum/duration（时间单位是秒,s），后面的1表示
 		return float64(tp.GetCommands()) / tp.GetDuration().AsDuration().Seconds(), 1
 	})
+}
+
+// RapidFair
+// 返回throughput Measurement的 区块延迟=间隔时间/提交区块的数量=duration/Commits（返回单位为毫秒ms）
+// 如果计算hotstuff的交易延迟 = 区块延迟*3
+// 原本的实现只能计算client的端到端延迟
+func GetBlockLatency(m Measurement) float64 {
+	tp := m.(*types.ThroughputMeasurement)
+	if tp.GetCommits() == uint64(0) {
+		return tp.GetDuration().AsDuration().Seconds() * 1000
+	}
+	return tp.GetDuration().AsDuration().Seconds() * 1000 / float64(tp.GetCommits())
 }

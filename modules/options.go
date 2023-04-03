@@ -18,6 +18,7 @@ type Options struct {
 
 	useFairOrder bool    // RapidFair: baseline 控制是否使用order-fairness算法
 	themisGamma  float32 // RapidFair: baseline Themis协议gamma参数
+	useRapidFair bool    // RapidFair 控制是否使用RapidFair算法
 }
 
 // ID returns the ID.
@@ -86,7 +87,7 @@ func (opts *Options) SetConnectionMetadata(key string, value string) {
 	opts.connectionMetadata[key] = value
 }
 
-// RapidFair: baseline 读、写、存useFairOrder变量
+// RapidFair: baseline 读、写、存公平排序相关变量
 func (opts *Options) UseFairOrder() bool {
 	return opts.useFairOrder
 }
@@ -101,4 +102,12 @@ func (opts *Options) ThemisGamma() float32 {
 
 func (opts *Options) SetThemisGamma(gamma float32) {
 	opts.themisGamma = gamma
+}
+
+func (opts *Options) UseRapidFair() bool {
+	return opts.useRapidFair
+}
+
+func (opts *Options) SetUseRapidFair() {
+	opts.useRapidFair = true
 }

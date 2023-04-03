@@ -21,8 +21,11 @@ type CommandQueue interface {
 	// RapidFair: baseline GetTxBatch让replica返回下一个希望提交的交易序列
 	GetTxBatch(ctx context.Context) (cmd hotstuff.Command, ok bool)
 
-	// RapidFair: baseline 获取当前最高提交的交易序列号
-	// GetHighProposedSeqNum() uint64
+	// RapidFair
+	// optimisticfairorder将Fragment写入blockchain
+	AddFragment(*hotstuff.Fragment)
+	// 让consensus的replica返回已经缓存的Fragment
+	GetFragment(ctx context.Context) (fragments []*hotstuff.Fragment, ok bool)
 }
 
 //go:generate mockgen -destination=../internal/mocks/acceptor_mock.go -package=mocks . Acceptor
@@ -34,6 +37,12 @@ type Acceptor interface {
 	// Proposed tells the acceptor that the propose phase for the given command succeeded, and it should no longer be
 	// accepted in the future.
 	Proposed(hotstuff.Command)
+
+	// RapidFair 为acceptor提供额外接口方法
+	// 使用ProposedFragment确定哪些交易已经提交到Fragment
+	ProposedFragment(hotstuff.Command)
+	// 在RapidFair中，共识流程提交Block的交易时，采用这个方法
+	ProposedBlock(hotstuff.Command)
 }
 
 //go:generate mockgen -destination=../internal/mocks/executor_mock.go -package=mocks . Executor
@@ -107,8 +116,11 @@ type Replica interface {
 	NewView(hotstuff.SyncInfo)
 	// Metadata returns the connection metadata sent by this replica.
 	Metadata() map[string]string
-	// RapidFair: 接口中增加Collect方法，在./backend/config.go中实现
+	// RapidFair: baseline接口中增加Collect方法，在./backend/config.go中实现
 	Collect(hotstuff.CollectTxSeq)
+
+	// RapidFair: 增加MultiCollect，replica发送MultiCollect消息给Leader
+	MultiCollect(hotstuff.MultiCollectMsg)
 }
 
 //go:generate mockgen -destination=../internal/mocks/configuration_mock.go -package=mocks . Configuration
@@ -132,10 +144,13 @@ type Configuration interface {
 	Fetch(ctx context.Context, hash hotstuff.Hash) (block *hotstuff.Block, ok bool)
 	// SubConfig returns a subconfiguration containing the replicas specified in the ids slice.
 	SubConfig(ids []hotstuff.ID) (sub Configuration, err error)
-	// RapidFair: 接口中增加ReadyCollect方法，在./backend/config.go中实现
-	ReadyCollect(rc hotstuff.ReadyCollectMsg)
+
+	// RapidFair: baseline接口中增加ReadyCollect方法，在./backend/config.go中实现
+	ReadyCollect(hotstuff.ReadyCollectMsg)
 	// RapidFair: 返回公平排序定义下的quorumsize
 	QuorumSizeFair() int
+	// RapidFair: 增加PreNotify，leader广播PreNotify消息给所有replicas
+	PreNotify(hotstuff.PreNotifyMsg)
 }
 
 //go:generate mockgen -destination=../internal/mocks/consensus_mock.go -package=mocks . Consensus
@@ -154,6 +169,8 @@ type Consensus interface {
 	ChainLength() int
 	// RapiFair: baseline FairPropose输入公平排序数据用于提出proposal
 	FairPropose(cert hotstuff.SyncInfo, cmd hotstuff.Command, txSeq map[hotstuff.ID]hotstuff.Command)
+	// RapidFair: 获取Fragments构建block用于提出block
+	RapidFairPropose(cert hotstuff.SyncInfo)
 }
 
 // LeaderRotation implements a leader rotation scheme.
@@ -179,6 +196,10 @@ type Synchronizer interface {
 	LeafBlock() *hotstuff.Block
 	// Start starts the synchronizer with the given context.
 	Start(context.Context)
+
+	// RapidFair: 增加对virtual view的维护
+	// VirView() hotstuff.View
+	// VirViewContext() context.Context
 }
 
 // Handel is an implementation of the Handel signature aggregation protocol.
@@ -231,7 +252,52 @@ type Collector interface {
 	// replica发送交易序列给leader
 	Collect(syncInfo hotstuff.SyncInfo)
 	// 公开构建txList的方法
-	ConstructTxList(txSeq map[hotstuff.ID]hotstuff.Command) ([][]string, map[string]*clientpb.Command)
+	// ConstructTxList(txSeq map[hotstuff.ID]hotstuff.Command) ([][]string, map[string]*clientpb.Command)
+	ConstructTxList(txSeq hotstuff.TXList) ([][]string, map[string]*clientpb.Command)
 	// leader广播能进行collect的消息给所有replicas
 	ReadyCollect(syncInfo hotstuff.SyncInfo)
+	// 公平排序将排序结果序列化为Command返回
+	FairOrder(cTxSeq hotstuff.TXList) hotstuff.Command
+}
+
+// RapidFair: 增加FragmentChain控制多个fragment(类似blockchain)
+type FragmentChain interface {
+	// 存储提出的fragment到FragmentChain中
+	Store(*hotstuff.Fragment)
+
+	LocalGet(hotstuff.Hash) (*hotstuff.Fragment, bool)
+
+	Get(hotstuff.Hash) (*hotstuff.Fragment, bool)
+
+	LocalGetAtHeight(hotstuff.View) (*hotstuff.Fragment, bool)
+}
+
+type TSFChain interface {
+	// 存储提出的fragment到TSFragmentChain中
+	Store(*hotstuff.TxSeqFragment)
+
+	LocalGet(hotstuff.Hash) (*hotstuff.TxSeqFragment, bool)
+
+	Get(hotstuff.Hash) (*hotstuff.TxSeqFragment, bool)
+}
+
+// RapidFair: 增加optimisticfairorder接口
+type OptimisticFairOrder interface {
+	// virtual leader使用PreNotify提出PreNotifyMsg{ID, TxSeqFragment}
+	PreNotify(vsync hotstuff.SyncInfo)
+}
+
+// 增加FairSynchronizer接口作为TxSeqFragment的同步器
+// 具体方法很接近Synchronizer
+type FairSynchronizer interface {
+	// 推进virtual view
+	AdvanceVirView(hotstuff.SyncInfo)
+	// 返回当前的virtual view
+	VirView() hotstuff.View
+	// 返回当前的virtual view对应的上下文
+	VirViewContext() context.Context
+	// 返回当前本地同步器中记录的最新TxSeqFragment
+	LeafTSF() *hotstuff.TxSeqFragment
+	// 使用给定的上下文启动同步器
+	Start(context.Context)
 }

@@ -355,8 +355,17 @@ func (c *configuration) Fetch(_ context.Context, hash hotstuff.Hash) (block *hot
 	return nil, false
 }
 
-// RapidFair: ReadyCollect sends the readycollect message to all replicas.
+// RapidFair: baseline ReadyCollect sends the readycollect message to all replicas.
 func (c *configuration) ReadyCollect(msg hotstuff.ReadyCollectMsg) {
+	c.broadcastMessage(msg)
+}
+
+// RapidFair: 增加PreNotify
+// func (c *configuration) MultiCollect(msg hotstuff.MultiCollectMsg) {
+// 	c.broadcastMessage(msg)
+// }
+
+func (c *configuration) PreNotify(msg hotstuff.PreNotifyMsg) {
 	c.broadcastMessage(msg)
 }
 
@@ -399,6 +408,11 @@ func (r *replica) Collect(col hotstuff.CollectTxSeq) {
 		ID:           r.config.node.opts.ID(),
 		CollectTxSeq: col,
 	})
+}
+
+// RapidFair: 增加MultiCollect方法
+func (r *replica) MultiCollect(msg hotstuff.MultiCollectMsg) {
+	r.config.sendMessage(r.id, msg)
 }
 
 func (r *replica) Metadata() map[string]string {

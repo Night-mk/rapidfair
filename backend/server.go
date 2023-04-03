@@ -236,3 +236,32 @@ func (impl *serviceImpl) ReadyCollect(ctx gorums.ServerCtx, rc *hotstuffpb.Ready
 	// AddEvent增加事件ReadyCollectMsg传输给eventLoop处理
 	impl.srv.eventLoop.AddEvent(rcMsg)
 }
+
+// RapidFair: 处理广播接收到的Collect消息（这里的view是virtual view）
+
+func (impl *serviceImpl) MultiCollect(ctx gorums.ServerCtx, mc *hotstuffpb.MCollect) {
+	// 从context中获取发送消息的replica的ID
+	var err error
+	mcMsg := hotstuffpb.MultiCollectFromProto(mc)
+	mcMsg.ID, err = GetPeerIDFromContext(ctx, impl.srv.configuration)
+	if err != nil {
+		impl.srv.logger.Infof("Failed to get client ID: %v", err)
+		return
+	}
+	// AddEvent增加事件MultiCollectMsg传输给eventLoop处理
+	impl.srv.eventLoop.AddEvent(mcMsg)
+}
+
+// RapidFair: 处理接收到的 proto.PreNotifyMsg
+func (impl *serviceImpl) PreNotify(ctx gorums.ServerCtx, pn *hotstuffpb.PreNotifyMsg) {
+	// 从context中获取发送消息的replica的ID
+	var err error
+	pnMsg := hotstuffpb.PreNotifyFromProto(pn)
+	pnMsg.ID, err = GetPeerIDFromContext(ctx, impl.srv.configuration)
+	if err != nil {
+		impl.srv.logger.Infof("Failed to get client ID: %v", err)
+		return
+	}
+	// AddEvent增加事件PreNotifyMsg传输给eventLoop处理
+	impl.srv.eventLoop.AddEvent(pnMsg)
+}

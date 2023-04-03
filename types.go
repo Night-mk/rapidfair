@@ -5,6 +5,7 @@ import (
 	"crypto"
 	"encoding/base64"
 	"encoding/binary"
+	"encoding/json"
 	"fmt"
 	"io"
 	"strconv"
@@ -384,7 +385,7 @@ func writeParticipants(wr io.Writer, participants IDSet) (err error) {
 	return err
 }
 
-// RapidFair: 在types里增加CollectTxSeq类型，并增加方法
+// RapidFair: baseline 在types里增加CollectTxSeq类型，并增加方法
 type CollectTxSeq struct {
 	view     View
 	txSeq    Command
@@ -407,7 +408,7 @@ func (col CollectTxSeq) SyncInfo() SyncInfo {
 	return col.syncInfo
 }
 
-// 增加ReadyCollect类型的消息
+// RapidFair: baseline 增加ReadyCollect类型的消息
 type ReadyCollect struct {
 	view     View
 	syncInfo SyncInfo
@@ -432,6 +433,90 @@ type TxID string
 // "tx"+clientID+","+SequenceNumber作为交易的唯一id
 func NewTxID(clientID uint32, sequenceNum uint64) TxID {
 	return TxID("tx" + strconv.Itoa(int(clientID)) + "+" + strconv.Itoa(int(sequenceNum)))
+}
+
+// RapidFair: 新增virtual view类型，使得optimistic fair order部分有自己的view编号
+type VirView uint64
+
+// ToBytes returns the virtual view as bytes.
+func (v VirView) ToBytes() []byte {
+	var viewBytes [8]byte
+	binary.LittleEndian.PutUint64(viewBytes[:], uint64(v))
+	return viewBytes[:]
+}
+
+// 设计数据结构记录交易序列的哈希Map<ID, Hash(Command)> （Command=txSeq）
+type TxSeqHash map[ID]Hash
+
+func (txh TxSeqHash) ToBytes() []byte {
+	txhB, err := json.Marshal(txh)
+	if err != nil {
+		fmt.Printf("[TXList.ToBytes()]: TxSeq serialization error: err=%v", err)
+	}
+	return txhB
+}
+
+// RapidFair: baseline 实现PreNotify数据类型
+type PreNotify struct {
+	virview   View
+	txSeqHash TxSeqHash
+}
+
+func NewPreNofity(v View, tm TxSeqHash) PreNotify {
+	return PreNotify{v, tm}
+}
+
+func (pn PreNotify) VirView() View {
+	return pn.virview
+}
+
+func (pn PreNotify) TxSeqHash() TxSeqHash {
+	return pn.txSeqHash
+}
+
+// 创建TXList类型，存储交易序列类型的数据，包括replica发送的txSeq, updateSeq
+// Command反序列化后的类型为，注意RapidFair中, TXList的Data=Hash(txData)
+/* message Command {
+	uint32 ClientID = 1;
+	uint64 SequenceNumber = 2;
+	bytes Data = 3;
+}*/
+type TXList map[ID]Command
+
+func NewTXList() TXList {
+	return make(TXList)
+}
+
+// 使用json的方法序列化交易列表为[]byte
+func (txl TXList) ToBytes() []byte {
+	txlB, err := json.Marshal(txl)
+	if err != nil {
+		fmt.Printf("[TXList.ToBytes()]: TxSeq serialization error: err=%v", err)
+	}
+	return txlB
+}
+
+// 构建MultiCollect类型
+type MultiCollect struct {
+	virView View
+	txSeq   Command
+	pc      PartialCert
+}
+
+func NewMultiCollect(v View, txSeq Command, pc PartialCert) MultiCollect {
+	return MultiCollect{v, txSeq, pc}
+}
+
+func (mc MultiCollect) VirView() View {
+	return mc.virView
+}
+
+func (mc MultiCollect) TxSeq() Command {
+	return mc.txSeq
+}
+
+func (mc MultiCollect) PartialCert() PartialCert {
+	return mc.pc
 }
 
 // RapidFair END

@@ -49,6 +49,7 @@ func (vm *VotingMachine) InitModule(mods *modules.Core) {
 func (vm *VotingMachine) OnVote(vote hotstuff.VoteMsg) {
 	cert := vote.PartialCert
 	vm.logger.Debugf("OnVote(%d): %.8s", vote.ID, cert.BlockHash())
+	// vm.logger.Infof("OnVote(%d): %.8s", vote.ID, cert.BlockHash())
 
 	var (
 		block *hotstuff.Block
@@ -97,6 +98,7 @@ func (vm *VotingMachine) verifyCert(cert hotstuff.PartialCert, block *hotstuff.B
 	defer vm.mut.Unlock()
 
 	// this defer will clean up any old votes in verifiedVotes
+	// 在verifyCert()函数结束之后执行
 	defer func() {
 		// delete any pending QCs with lower height than bLeaf
 		for k := range vm.verifiedVotes {
@@ -117,7 +119,7 @@ func (vm *VotingMachine) verifyCert(cert hotstuff.PartialCert, block *hotstuff.B
 	if len(votes) < vm.configuration.QuorumSize() {
 		return
 	}
-	// vote数量超过quorum，则创建QC
+	// vote数量超过quorum，则创建QC, QC的view其实就block.View(), hash就是block.Hash()
 	qc, err := vm.crypto.CreateQuorumCert(block, votes)
 	if err != nil {
 		vm.logger.Info("OnVote: could not create QC for block: ", err)
@@ -126,6 +128,6 @@ func (vm *VotingMachine) verifyCert(cert hotstuff.PartialCert, block *hotstuff.B
 	delete(vm.verifiedVotes, cert.BlockHash())
 	// Leader每次在接收到足够多vote最后都发送NewViewMsg来推进view（默认采用pipelined结构hotstuff？）
 	// 处理NewViewMsg的方法在synchronizer.go中，使用AdvanceView()
-	vm.logger.Infof("[OnVote]: Leader call advanceView() actively")
+	// vm.logger.Infof("[OnVote]: Leader call advanceView() actively")
 	vm.eventLoop.AddEvent(hotstuff.NewViewMsg{ID: vm.opts.ID(), SyncInfo: hotstuff.NewSyncInfo().WithQC(qc)})
 }

@@ -9,6 +9,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -84,10 +85,12 @@ func init() {
 	// RapidFair: baseline 增加collect阶段的配置设置
 	// serialcollect表示使用Themis协议
 	runCmd.Flags().String("fairorder-collect", "serialcollect", "enable fair ordering collect phase")
-	// 增加是否执行RapidFair的参数
-	runCmd.Flags().Bool("usefairorder", false, "enable order-fairness protocol (Themis or RapidFair)")
+	// 增加是否执行Themis的参数
+	runCmd.Flags().Bool("usefairorder", false, "enable order-fairness protocol (Themis)")
 	// 增加Themis的gamma参数
 	runCmd.Flags().Float32("themis-gamma", 1.0, "gamma parameter in Themis")
+	// 增加是否执行RapidFair的参数
+	runCmd.Flags().Bool("userapidfair", false, "enable order-fairness protocol (RapidFair)")
 
 	err := viper.BindPFlags(runCmd.Flags())
 	if err != nil {
@@ -96,6 +99,7 @@ func init() {
 }
 
 func runController() {
+	useMultiCore()
 	var err error
 	outputDir := "" // metric的输出目录
 	if output := viper.GetString("output"); output != "" {
@@ -128,6 +132,7 @@ func runController() {
 			FairOrderCollect: viper.GetString("fairorder-collect"),
 			UseFairOrder:     viper.GetBool("usefairorder"),
 			ThemisGamma:      float32(viper.GetFloat64("themis-gamma")),
+			UseRapidFair:     viper.GetBool("userapidfair"),
 		},
 		ClientOpts: &orchestrationpb.ClientOpts{
 			UseTLS:           true,
@@ -335,4 +340,10 @@ func startLocalProfiling(output string) (stop func() error, err error) {
 
 	stop, err = profiling.StartProfilers(cpuProfile, memProfile, trace, fgprofProfile)
 	return
+}
+
+// RapidFair: 优化提升多核cpu的使用率？
+func useMultiCore() {
+	// 使用最多能使用的进程数量
+	runtime.GOMAXPROCS(runtime.NumCPU())
 }
