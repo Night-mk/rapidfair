@@ -158,6 +158,7 @@ func (srv *Replica) Start() {
 
 // Stop stops the replica and closes connections.
 func (srv *Replica) Stop() {
+	fmt.Printf("[Replica]: Stop \n")
 	srv.cancel() // 调用cancel()取消上下文
 	// srv.fairSyncCancel() // RapidFair: 停止fairSynchronizer
 	<-srv.done // 如果channel中没有值，则会阻塞后续语句；channel关闭后，读取channel不会阻塞；因此在确定调用了close(srv.done)之后，这里才能继续执行后续的srv.Close()方法
@@ -185,9 +186,13 @@ func (srv *Replica) RunFairSync(ctx context.Context) {
 	// RapidFair: 启动fairSynchronizer【两个同步器是不是不应该使用同一个上下文？】
 	if opts.UseRapidFair() {
 		fmt.Println("===========================CAN RUN fairSynchronizer===========================")
-		var fairSynchronizer modules.FairSynchronizer
-		srv.hs.Get(&fairSynchronizer)
+		var (
+			fairSynchronizer modules.FairSynchronizer
+			eventLoopFair    *eventloop.EventLoopFair
+		)
+		srv.hs.Get(&fairSynchronizer, &eventLoopFair)
 		fairSynchronizer.Start(ctx)
+		eventLoopFair.Run(ctx)
 	}
 }
 

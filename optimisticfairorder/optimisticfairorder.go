@@ -1,6 +1,9 @@
 package optimisticfairorder
 
 import (
+	"sync"
+	"time"
+
 	"github.com/relab/hotstuff"
 	"github.com/relab/hotstuff/eventloop"
 	"github.com/relab/hotstuff/logging"
@@ -25,17 +28,18 @@ type optFairOrder struct {
 	leaderRotation   modules.LeaderRotation // 计算virView对应的交易virLeader
 	logger           logging.Logger
 	fairSynchronizer modules.FairSynchronizer // 利用synchronizer控制推进virView
-	eventLoop        *eventloop.EventLoop     // 处理事件
-	acceptor         modules.Acceptor
-	commandQueue     modules.CommandQueue
-	opts             *modules.Options
-	configuration    modules.Configuration
-	col              modules.Collector
-	crypto           modules.Crypto
+	// eventLoop        *eventloop.EventLoop     // 处理事件
+	eventLoopFair *eventloop.EventLoopFair // 处理事件
+	acceptor      modules.Acceptor
+	commandQueue  modules.CommandQueue
+	opts          *modules.Options
+	configuration modules.Configuration
+	col           modules.Collector
+	crypto        modules.Crypto
 
 	lastVote hotstuff.View
 
-	// mut   sync.Mutex
+	mut   sync.Mutex
 	fExec *hotstuff.Fragment // 记录已经完成构建的最新fragment
 
 	txLists map[hotstuff.View]hotstuff.TXList
@@ -59,7 +63,7 @@ func (of *optFairOrder) InitModule(mods *modules.Core) {
 		&of.leaderRotation,
 		&of.logger,
 		&of.fairSynchronizer,
-		&of.eventLoop,
+		&of.eventLoopFair,
 		&of.acceptor,
 		&of.commandQueue,
 		&of.opts,
@@ -70,10 +74,10 @@ func (of *optFairOrder) InitModule(mods *modules.Core) {
 
 	// 注册消息处理
 	// 处理CollectMsg，注册事件处理函数OnMultiCollect
-	of.eventLoop.RegisterHandler(hotstuff.MultiCollectMsg{}, func(event any) { of.OnMutiCollect(event.(hotstuff.MultiCollectMsg)) })
+	of.eventLoopFair.RegisterHandler(hotstuff.MultiCollectMsg{}, func(event any) { of.OnMutiCollect(event.(hotstuff.MultiCollectMsg)) })
 
 	// 处理PreNotifyMsg，注册事件处理函数OnPreNotify
-	of.eventLoop.RegisterHandler(hotstuff.PreNotifyMsg{}, func(event any) { of.OnPreNotify(event.(hotstuff.PreNotifyMsg)) })
+	of.eventLoopFair.RegisterHandler(hotstuff.PreNotifyMsg{}, func(event any) { of.OnPreNotify(event.(hotstuff.PreNotifyMsg)) })
 }
 
 // 控制multiCollect，广播local-order的交易序列给所有replica
@@ -101,11 +105,11 @@ func (of *optFairOrder) MultiCollect(vsync hotstuff.SyncInfo, pc hotstuff.Partia
 		}
 		// 1.2 在cmdcache中确定提交最新QC的virView中的fragment
 		// 通过TxSeqFragment的QC.View()=v获取对应View的Fragment(v)，Fragment此时还没构建QC
+		// 开始执行collect阶段的节点一定能从本地获取qc.virView+1的fragment，因为这些节点已经计算完成了公平排序
 		// if qcFragment, ok := of.fragmentChain.Get(qc.BlockHash()); ok {
 		if fragment, ok := of.fragmentChain.LocalGetAtHeight(qc.View() + 1); ok {
 			// 在cmdcache中提交virView的fragment并准备好构建下一个txbatch
-			// of.acceptor.Proposed(qcFragment.OrderedTx())
-			of.acceptor.ProposedFragment(fragment.OrderedTx())
+			of.acceptor.ProposedFragment(fragment.VirView(), fragment.OrderedTx())
 		} else {
 			of.logger.Infof("Could not find fragment for virView=QC.VirView+1: %d", qc.View()+1)
 		}
@@ -137,7 +141,8 @@ func (of *optFairOrder) MultiCollect(vsync hotstuff.SyncInfo, pc hotstuff.Partia
 	leaderID := of.leaderRotation.GetLeader(newVirView)
 	if of.opts.ID() == leaderID {
 		// leader本地触发OnMutiCollect事件
-		of.OnMutiCollect(mcmsg)
+		of.eventLoopFair.AddEvent(mcmsg)
+		// of.OnMutiCollect(mcmsg)
 	} else {
 		// 所有replica都发送MultiCollectMsg给leader
 		replica, ok := of.configuration.Replica(leaderID)
@@ -153,13 +158,13 @@ func (of *optFairOrder) MultiCollect(vsync hotstuff.SyncInfo, pc hotstuff.Partia
 // 处理接收的MultiCollectMsg（类似OnVote）
 // 此时QC(v-2), curVirView(v-1), newVirView(v)
 func (of *optFairOrder) OnMutiCollect(mc hotstuff.MultiCollectMsg) {
-	// of.logger.Infof("[OnMutiCollect]")
+	// of.logger.Infof("[OnMutiCollect] Start, receive from %d", mc.ID)
 
 	// 1. 对比msg中的virView和本地同步器中的fragment的virView
 	txSeq := mc.MultiCollect
 	msgVirView := txSeq.VirView()
 	// highQcView应该要维护TxSeqFragment的view来更新！！！
-	// 但是此时virView的关系是：highQcView = curTFSVirView - 1 = msgVirView - 2
+	// 但是此时virView的关系是：highQcView = curTSFVirView - 1 = msgVirView - 2
 	highQcView := of.fairSynchronizer.LeafTSF().VirView()
 
 	// 消息中的view如果比最新的上一个节点的view更低，则不接受该消息
@@ -168,66 +173,91 @@ func (of *optFairOrder) OnMutiCollect(mc hotstuff.MultiCollectMsg) {
 	}
 	// 如果msgVirView比本地的最高highQcView+1还高，应该使用msgVirView作为新的virView
 	newVirView := msgVirView
-	// of.logger.Infof("[OnMultiCollect]: After Get Replica ID on replicaID: %d, virView: %d", of.opts.ID(), msgVirView)
-	// 2. 缓存其他节点广播的交易序列到本地缓存txLists: map<VirView,TXList=<ID,Command>>
+
+	quit := make(chan int)
+	// Leader并行执行接收到MultiCollect之后的处理工作
+	go of.handleCollect(newVirView, mc, quit)
+	// of.handleCollect(newVirView, cert, mc)
+
+	// 阻塞主程序等待协程返回
+	for {
+		<-quit
+		close(quit)
+		break
+	}
+	// of.logger.Infof("[OnMutiCollect] Async END, receive from: %d, len of.txLists: %d", mc.ID, len(of.txLists[newVirView]))
+}
+
+// 使用goroutine需要阻塞主线程
+func (of *optFairOrder) handleCollect(newVirView hotstuff.View, mc hotstuff.MultiCollectMsg, quit chan int) {
+	of.mut.Lock()
+	defer of.mut.Unlock()
+
 	var votes []hotstuff.PartialCert
-	cert := txSeq.PartialCert()
-	if msgVirView == newVirView {
-		// 验证cert的正确性
+	// var curTxLists hotstuff.TXList
+	cert := mc.MultiCollect.PartialCert()
+
+	// 缓存replica发送的交易序列
+	if len(of.txLists[newVirView]) == 0 {
+		of.txLists[newVirView] = make(hotstuff.TXList)
+	}
+	needAdd := false
+	// 先判断是否需要继续收集其他节点发送的数据，之后再验证PC
+	if len(of.txLists[newVirView]) < of.configuration.QuorumSizeFair() {
+		// 验证PC的正确性 （耗时比较长，batchsize=100, 时间约为0.2~1ms±）
 		if !of.crypto.VerifyPartialCertTSF(cert) {
-			of.logger.Info("[OnMutiCollect]: TSFVote could not be verified!")
+			of.logger.Infof("[OnMutiCollect]: TSFVote pc could not be verified! for pc virView: %d", newVirView-1)
 			return
 		}
-		// 缓存replica发送的交易序列
-		if len(of.txLists[newVirView]) == 0 {
-			of.txLists[newVirView] = make(hotstuff.TXList)
-		}
-		of.txLists[newVirView][mc.ID] = txSeq.TxSeq()
+		needAdd = true
+		// 缓存其他节点广播的交易序列到本地缓存txLists: map<VirView,TXList=<ID,hash(Command)>>
+		of.txLists[newVirView][mc.ID] = mc.MultiCollect.TxSeq()
 		// 同时也要缓存TxSeqFragment的PC
 		votes = of.tsfVote[cert.BlockHash()]
 		votes = append(votes, cert)
 		of.tsfVote[cert.BlockHash()] = votes
-	} else {
+	}
+
+	// of.logger.Infof("[OnMutiCollect]: receive from %d, new virtual view: %d, len txLists[newView]: %d, len votes:%d", mc.ID, newVirView, len(of.txLists[newVirView]), len(of.tsfVote[cert.BlockHash()]))
+
+	// Leader接收到(n-f)个交易序列后就可以开始PreNotify+公平排序
+	if len(of.txLists[newVirView]) < of.configuration.QuorumSizeFair() {
+		quit <- 1
+		return
+	}
+	if !needAdd {
+		// of.logger.Infof("[OnMutiCollect]: return virtual view: %d\n", newVirView)
+		quit <- 1
 		return
 	}
 
-	// 3. 对于不同节点接收到collectMsg后的处理
-	// 计算virView=v+1的leader节点的ID
-	leaderID := of.leaderRotation.GetLeader(newVirView)
-	if leaderID == of.opts.ID() {
-		// 3.1 Leader的处理 -> Fair Ordering
-		// Leader接收到(n-f)个交易序列后就可以开始PreNotify+公平排序
-		if len(of.txLists[newVirView]) != of.configuration.QuorumSizeFair() {
-			return
-		}
-		of.logger.Infof("[OnMutiCollect]: Leader process, new virtual view: %d", newVirView)
-		// 3.2 计算TxSeqFragment(v-1)的QC，方法返回后删除本地缓存的PC
-		// 根据PC.hash从tsfChain获取TxSeqFragment
-		tsfPrev, ok := of.tsfChain.Get(cert.BlockHash())
-		if !ok {
-			of.logger.Debugf("Could not find TxSeqFragment for vote: %.8s.", cert.BlockHash())
-			return
-		}
-		// 利用(n-f)个PC计算TxSeqFragment(v-1)的QC
-		qc, err := of.crypto.CreateQuorumCertTSF(tsfPrev, votes)
-		if err != nil {
-			of.logger.Info("OnVote: could not create QC for TxSeqFragment: ", err)
-			return
-		}
-		delete(of.tsfVote, cert.BlockHash())
-		// 使用QC构建vsync
-		vsyncNew := hotstuff.NewSyncInfo().WithQC(qc)
-		// 3.3 Leader使用FairSynchronizer推进virtual view
-		of.eventLoop.AddEvent(hotstuff.NewVirViewMsg{
-			ID:    of.opts.ID(),
-			VSync: vsyncNew,
-		})
-		// of.fairSynchronizer.AdvanceVirView(vsyncNew)
-
+	// 3.2 计算TxSeqFragment(v-1)的QC，方法返回后删除本地缓存的PC
+	// 根据PC.hash从tsfChain获取TxSeqFragment
+	tsfPrev, ok := of.tsfChain.Get(cert.BlockHash())
+	if !ok {
+		of.logger.Infof("Could not find TxSeqFragment for vote: %.8s.", cert.BlockHash())
+		return
 	}
-	// Replica的处理（不操作，等待PreNotify?）
-	// 直接进入到Pre-Verify阶段
+	// 利用(n-f)个PC计算TxSeqFragment(v-1)的QC（createQC的时间很短，1-10μm）
+	qc, err := of.crypto.CreateQuorumCertTSF(tsfPrev, votes)
+	if err != nil {
+		of.logger.Info("OnVote: could not create QC for TxSeqFragment: ", err)
+		return
+	}
 
+	delete(of.tsfVote, cert.BlockHash())
+	// 使用QC构建vsync
+	vsyncNew := hotstuff.NewSyncInfo().WithQC(qc)
+	// 3.3 Leader使用FairSynchronizer推进virtual view
+	of.eventLoopFair.AddEvent(hotstuff.NewVirViewMsg{
+		ID:    of.opts.ID(),
+		VSync: vsyncNew,
+	})
+	// of.logger.Infof("[OnMutiCollect]: Leader process, new virtual view: %d", newVirView)
+	if newVirView%20 == 0 {
+		of.logger.Infof("[OnMutiCollect]: Leader process, new virtual view: %d", newVirView)
+	}
+	quit <- 1
 }
 
 // Leader：广播PreNotify消息给replicas（类似Propose）
@@ -241,6 +271,7 @@ func (of *optFairOrder) PreNotify(vsync hotstuff.SyncInfo) {
 		// 确定上一个TxSeqFragment(v-1)是否已经保存
 		if _, ok := of.tsfChain.Get(qc.BlockHash()); !ok {
 			of.logger.Errorf("Could not find TxSeqFragment for QC: %s", qc)
+			of.logger.Infof("Could not find TxSeqFragment for QC: %s", qc)
 		}
 	}
 
@@ -264,11 +295,12 @@ func (of *optFairOrder) PreNotify(vsync hotstuff.SyncInfo) {
 		ID:            of.opts.ID(),
 		TxSeqFragment: tsfCur,
 	}
-	of.logger.Infof("[PreNotify]: tsf hash: %.8s", tsfCur.Hash())
-	// 2. 存储TxSeqFragment(v)到
-	of.tsfChain.Store(tsfCur)
+	// of.logger.Infof("[PreNotify]: tsf hash: %.8s", tsfCur.Hash())
+
+	// 2. 存储TxSeqFragment(v)到tsfChain
+	// of.tsfChain.Store(tsfCur)
 	// 3. 广播PreNotify消息
-	of.configuration.PreNotify(pn)
+	go of.configuration.PreNotify(pn)
 	// 4. Leader本地调用OnPreNotify
 	of.OnPreNotify(pn)
 }
@@ -279,65 +311,84 @@ func (of *optFairOrder) OnPreNotify(pnm hotstuff.PreNotifyMsg) {
 	// of.logger.Infof("[OnPreNotify]")
 	// 1. 先判断PreNotifyMsg的正确性
 	tsf := pnm.TxSeqFragment
-	// 1.1 验证QC
+	// 1.1 验证QC（batchsize=100, 时间约为0.1~4ms±）
 	if !of.crypto.VerifyQuorumCertTSF(tsf.QuorumCert()) {
 		of.logger.Info("[OnPreNotify]: Invalid QC")
 		return
 	}
+
 	// 1.2 验证leader是否正确
 	if pnm.ID != of.leaderRotation.GetLeader(tsf.VirView()) {
 		of.logger.Infof("[OnPreNotify]: Invalid virtual leader")
 		return
 	}
-	// 一般情况下再这里应该要提交本virView的Fragment(v)，但是我们的协议想并行处理公平排序的计算，所以replica在这里先不提交，等到replica本地计算完公平排序，在MultiCollect中再提交
-	// 1.3 只验证QC.TxSeqFragment是否能获取
-	if _, ok := of.tsfChain.Get(tsf.QuorumCert().BlockHash()); !ok {
-		of.logger.Infof("[OnPreNotify]: Failed to fetch QC.TxSeqFragment")
-	}
-	// 1.3.1 能获取到QC时，直接存储PreNotifyMsg发送的tsf到本地
-	of.tsfChain.Store(tsf)
-
-	// 1.4 判断发送来的tsf是否已经提交过
+	// 1.3 判断发送来的tsf是否已经提交过
 	if tsf.VirView() <= of.lastVote {
 		of.logger.Infof("[OnPreNotify]: TSF view too old, TSF view: %d, current view: %d, lastVote view: %d", tsf.VirView(), of.fairSynchronizer.VirView(), of.lastVote)
 		return
 	}
+	// 一般情况下再这里应该要提交本轮virView的Fragment(v)，但是我们的协议想并行处理公平排序的计算，所以replica在这里先不提交，等到replica本地计算完公平排序，在MultiCollect中再提交
+	// 1.4 验证QC.TxSeqFragment是否能获取
+	if tsf, ok := of.tsfChain.Get(tsf.QuorumCert().BlockHash()); ok {
+		// 如果能在节点本地获取构建了QC的TxSeqFragment
+		qcVirView := tsf.VirView()
+		if qcVirView > 0 { // genesis的fragment已经在初始化的时候写入了
+			// 之后才能再将tsf对应的fragment增加到节点的cmdCache的缓存中
+			// eventloop保证一个节点一定会先执行完上一个OnPreNotify将fragment存入fragmentChain，再执行下一个OnPreNotify
+			if fragment, ok := of.fragmentChain.LocalGetAtHeight(qcVirView); ok {
+				// of.logger.Infof("[OnPreNotify]: Can Add fragment on virView: %d", qcVirView)
+				of.commandQueue.AddFragment(fragment)
+			} else {
+				of.logger.Infof("[OnPreNotify]: error Failed to get QC.Fragment")
+			}
+		}
+	} else {
+		of.logger.Infof("[OnPreNotify]: error Failed to get QC.TxSeqFragment")
+		return
+	}
+	// 1.5 能获取到QC时，直接存储PreNotifyMsg发送的tsf到tsfChain
+	of.tsfChain.Store(tsf)
 
-	// 2. replicas计算对tsf的部分签名pc(表示同意tsf)
+	// 2. replicas计算对tsf的部分签名pc(表示同意tsf)（batchsize=100, 时间约为0.1~3ms±）
 	pc, err := of.crypto.CreatePartialCertTSF(tsf)
+
 	if err != nil {
-		of.logger.Error("OnPropose: failed to sign TxSeqFragment: ", err)
+		// of.logger.Error("[OnPreNotify]: failed to sign TxSeqFragment: ", err)
+		of.logger.Info("[OnPreNotify]: failed to sign TxSeqFragment: ", err)
 		return
 	}
 	// 更新lastVote
 	of.lastVote = tsf.VirView()
 
-	// 计算tsf的当前的leader
-	// curLeaderID := of.leaderRotation.GetLeader(tsf.VirView())
-	// if curLeaderID != of.opts.ID() {}
-
 	// 3. 当前VirView()的replica（包括leader）根据tsf指定的节点的交易序列TxSeqHash，在本地计算公平排序
 	// 本地计算公平排序
+	start := time.Now() // 获取当前时间
 	odc := of.col.FairOrder(tsf.TxSeqHash())
 	// 构建fragment
 	fragment := hotstuff.NewFragment(tsf.VirView(), tsf.VirLeader(), odc, tsf.TxSeqHash(), hotstuff.Command(""), make(hotstuff.TXList))
 	// 将fragment存储到fragmentChain
 	of.fragmentChain.Store(fragment)
 	// 将fragment增加到cmdCache的缓存中
-	of.commandQueue.AddFragment(fragment)
+	// of.commandQueue.AddFragment(fragment)
+	elapsed1 := time.Since(start)
+	curLeaderID := of.leaderRotation.GetLeader(tsf.VirView())
+	// of.logger.Info("Replica Fair Order + new,store fragment time:", elapsed1)
+	if curLeaderID == of.opts.ID() {
+		// of.logger.Info("Virtual Leader Fair Order + new,store fragment time:", elapsed1)
+		if tsf.VirView()%20 == 0 {
+			of.logger.Info("Virtual Leader Fair Order + new,store fragment time:", elapsed1)
+		}
+	}
 
 	// 4. 如果没有推进view，则在defer方法中最后推进节点的view（只有current replica会推进）
 	didAdvanceView := false
 	vsync := hotstuff.NewSyncInfo().WithQC(tsf.QuorumCert())
-	// defer func() {
 	// 在执行multiCollect之前就推进virView
 	if !didAdvanceView {
 		// of.logger.Infof("[OnPreNotify]: Replica call advanceView() actively, lastvote view: %d", of.lastVote)
 		of.fairSynchronizer.AdvanceVirView(vsync)
 	}
-	// }()
-
-	// 5. 清空本virView接收的交易序列（清理缓存）
+	// 5. Leader清空本virView接收的交易序列（清理缓存）
 	if len(of.txLists) > 0 {
 		for k := range of.txLists {
 			if k <= of.fairSynchronizer.LeafTSF().VirView() {
@@ -345,7 +396,6 @@ func (of *optFairOrder) OnPreNotify(pnm hotstuff.PreNotifyMsg) {
 			}
 		}
 	}
-
 	// of.logger.Infof("[OnPreNotify]: After Delete cache on replicaID: %d", of.opts.ID())
 
 	// 6.所有replica都执行MutiCollect来处理新一轮的Collect消息发送

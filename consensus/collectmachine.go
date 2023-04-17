@@ -175,7 +175,8 @@ func (cm *CollectMachine) OnCollect(col hotstuff.CollectMsg) {
 	if txSeq.View() == newView {
 		cm.collectedTxSeq[newView][col.ID] = txSeq.TxSeq()
 	}
-	cm.logger.Debugf("OnCollect(): after collect tx seq, node id: %d, view: %d, collect from id: %d, collectseq num: %d, quorumsizefair: %d", cm.opts.ID(), newView, col.ID, len(cm.collectedTxSeq[newView]), cm.configuration.QuorumSizeFair())
+	// cm.logger.Infof("OnCollect(): after collect tx seq, node id: %d, view: %d, collect from id: %d, collectseq num: %d, quorumsizefair: %d", cm.opts.ID(), newView, col.ID, len(cm.collectedTxSeq[newView]), cm.configuration.QuorumSizeFair())
+
 	// collect交易序列数量不等于quorum时不能执行公平排序
 	if len(cm.collectedTxSeq[newView]) != cm.configuration.QuorumSizeFair() {
 		return

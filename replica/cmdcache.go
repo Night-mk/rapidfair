@@ -205,10 +205,14 @@ awaitBatch:
 		}
 		// 将没有重复的交易cmd加入到batch中
 		// RapidFair优化：交易的data field只用计算hash，之后加入batch
-		if c.opts.UseRapidFair() || c.opts.UseFairOrder() { // Themis优化后，data进行hash之后传输
+		// if c.opts.UseRapidFair() || c.opts.UseFairOrder() { // Themis优化后，data进行hash之后传输
+		if c.opts.UseFairOrder() { // Themis优化后，data进行hash之后传输
 			// if c.opts.UseRapidFair() { // Themis优化前
 			dataHash := sha256.Sum256(cmd.Data)
 			cmd.Data = dataHash[:]
+		}
+		if c.opts.UseRapidFair() { // RapidFair再次优化，cmd只记录ID，不记录Data
+			cmd.Data = []byte{}
 		}
 		batch.Commands = append(batch.Commands, cmd)
 		c.currentBatchCache[txId] = cmd
@@ -306,19 +310,11 @@ func (c *cmdCache) Proposed(cmd hotstuff.Command) {
 		c.currentBatchCache = make(map[hotstuff.TxID]*clientpb.Command, 0)
 		c.currentBatchTxId = make([]hotstuff.TxID, 0)
 	}
-
-	// RapidFair: 将已经提交到fragmentTxCache的交易也提交到Block（加入proposedCache）
-	// if len(c.fragmentTxCache) > 0 {
-	// 	for k := range c.fragmentTxCache {
-	// 		c.proposedCache[k] = 1
-	// 	}
-	// 	c.fragmentTxCache = make(map[hotstuff.TxID]int, 0)
-	// }
-	// RapidFair: baseline END
 }
 
 // RapidFair: optimisticfairorder中，replica将当前提交到Fragment的交易加入到fragmentTxCache
-func (c *cmdCache) ProposedFragment(cmd hotstuff.Command) {
+// view用于更新该fragment的最高提交view
+func (c *cmdCache) ProposedFragment(virView hotstuff.View, cmd hotstuff.Command) {
 	batch := new(clientpb.Batch)
 	err := c.unmarshaler.Unmarshal([]byte(cmd), batch)
 	if err != nil {
@@ -343,6 +339,9 @@ func (c *cmdCache) ProposedFragment(cmd hotstuff.Command) {
 		delete(c.currentBatchCache, txId)
 		// fragKeys = append(fragKeys, txId)
 	}
+	// 更新提交的fragment的最新的virView
+	// c.highFragVirView = virView
+
 	// fmt.Println("currentBatchCache: ", curKeys)
 	// fmt.Println("ProposedFragment: ", fragKeys)
 	// c.logger.Infof("==============[ProposedFragment]: Fragment command len: %d, currentBatchCache len: %d==============", len(batch.GetCommands()), len(c.currentBatchCache))
@@ -363,7 +362,7 @@ func (c *cmdCache) ProposedFragment(cmd hotstuff.Command) {
 }
 
 // RapidFair: 共识节点对提交到Block中的交易，更新proposedCache
-func (c *cmdCache) ProposedBlock(cmd hotstuff.Command) {
+func (c *cmdCache) ProposedBlock(frag []hotstuff.FragmentData, cmd hotstuff.Command) {
 	batch := new(clientpb.Batch)
 	err := c.unmarshaler.Unmarshal([]byte(cmd), batch)
 	if err != nil {
@@ -374,28 +373,62 @@ func (c *cmdCache) ProposedBlock(cmd hotstuff.Command) {
 	c.mut.Lock()
 	defer c.mut.Unlock()
 
-	c.logger.Infof("==============[ProposedBlock]: QC Block command len: %d==============", len(batch.GetCommands()))
+	// c.logger.Infof("==============[ProposedBlock]: QC Block command len: %d==============", len(batch.GetCommands()))
 	for _, cmd := range batch.GetCommands() {
 		txId := hotstuff.NewTxID(cmd.GetClientID(), cmd.GetSequenceNumber())
 		c.proposedCache[txId] = 1
 		// 提出一个新block之后，就应该删除对应的fragment缓存中的交易
 		delete(c.fragmentTxCache, txId)
 	}
+	// 提出新block后，replica也应该从fragList中删除已经提交的fragData对应的fragment
+	if len(frag) > 0 {
+		lastVirView := frag[len(frag)-1].VirView()
+		// 根据block中提交的fragment的virView决定是否要更新highFragVirView
+		if c.highFragVirView < lastVirView {
+			c.highFragVirView = lastVirView
+		}
+		for {
+			elem := c.fragList.Front()
+			if elem == nil {
+				break
+			}
+			f := elem.Value.(*hotstuff.Fragment)
+			if f.VirView() <= lastVirView {
+				c.fragList.Remove(elem)
+			} else { // 如果cmdcache中fragList的fragment的virView超过block提出的fragment的virView，则退出删除循环
+				break
+			}
+		}
+	}
 }
+
+// 判断提出block的fragment是否能被接受accept，如果
+// func (c *cmdCache) AcceptBlock(frag []hotstuff.FragmentData) bool{
+// 	c.mut.Lock()
+// 	defer c.mut.Unlock()
+
+// 	if len(frag)
+// }
 
 // RapidFair: AddFragment用于optimisticfairorder将Fragment加入fragList链表
 func (c *cmdCache) AddFragment(fragment *hotstuff.Fragment) {
 	c.mut.Lock()
 	defer c.mut.Unlock()
 
-	if c.highFragVirView >= fragment.VirView() {
-		// 该fragment的virtual view已经提交过了
-		return
+	// c.logger.Infof("[AddFragment] highvirView: %d, fragment virView: %d", c.highFragVirView, fragment.VirView())
+	// 该virtual view的fragment的已经提交过了 (应该什么时候确定？)
+	if fragment.VirView() != 0 {
+		if c.highFragVirView >= fragment.VirView() {
+			return
+		}
 	}
 	// 将fragment写入list
 	c.fragList.PushBack(fragment)
+	// 这里就直接更新highFragVirView
+	c.highFragVirView = fragment.VirView()
+
 	if c.fragList.Len() > 0 {
-		// c.logger.Infof("[AddFragment]: Have added fragment in nodeID: %d", c.opts.ID())
+		// c.logger.Infof("[AddFragment]: Have added fragment view=%d, fragList len=%d, in nodeID: %d", fragment.VirView(), c.fragList.Len(), c.opts.ID())
 		// 通知GetFragment方法已经写入了新Fragment,可以开始读取到block中
 		select {
 		case c.canGetFrag <- struct{}{}:
@@ -407,15 +440,17 @@ func (c *cmdCache) AddFragment(fragment *hotstuff.Fragment) {
 // RapidFair: 共识模块中leader从FragmentChain中记录的Fragments中获取有序交易
 // 这里ctx是consensus的上下文
 func (c *cmdCache) GetFragment(ctx context.Context) (fragments []*hotstuff.Fragment, ok bool) {
-	c.logger.Debugf("[GetFragment]: nodeID: %d", c.opts.ID())
+	// c.logger.Infof("[GetFragment]: nodeID: %d", c.opts.ID())
 	c.mut.Lock()
 	// fragments := make([]*hotstuff.Fragment, 0)
 	// 等待条件，至少等待1个fragment，fragment数量不超过batchSize
 	for c.fragList.Len() <= 0 {
+		// c.logger.Infof("[GetFragment]: need wait nodeID: %d", c.opts.ID())
 		c.mut.Unlock()
 		select { // select 能够让 Goroutine 同时等待多个 Channel 可读或者可写
 		case <-c.canGetFrag:
 		case <-ctx.Done():
+			c.logger.Infof("[GetFragment]: ctx done: %d", c.opts.ID())
 			return
 		}
 		c.mut.Lock()
@@ -423,15 +458,34 @@ func (c *cmdCache) GetFragment(ctx context.Context) (fragments []*hotstuff.Fragm
 	// c.logger.Infof("[GetFragment]: Have Fragment nodeID: %d", c.opts.ID())
 	// 如果只有一个fragment，则可以直接返回fragment的交易部分
 	// 从fragment中读取交易并加入到batch中
-	for i := 0; i < c.fragList.Len(); i++ {
+	for i := 0; i < c.batchSize; i++ {
 		elem := c.fragList.Front()
 		if elem == nil {
 			break
 		}
 		c.fragList.Remove(elem) // 从list里删除fragment
 		f := elem.Value.(*hotstuff.Fragment)
+
 		fragments = append(fragments, f)
+
+		// 打印一下所有的fragment的OrderedTx看一下
+		/*
+			txs := f.OrderedTx()
+			batch := new(clientpb.Batch)
+			err := c.unmarshaler.Unmarshal([]byte(txs), batch)
+			if err != nil {
+				c.logger.Infof("[GetFragment]: Failed to unmarshal batch: %v", err)
+			}
+			txsId := make([]hotstuff.TxID, 0)
+			for _, cmd := range batch.GetCommands() {
+				txId := hotstuff.NewTxID(cmd.GetClientID(), cmd.GetSequenceNumber())
+				txsId = append(txsId, txId)
+			}
+			c.logger.Infof("Get fragment txs: %v", txsId)
+		*/
 	}
+	// c.logger.Infof("[GetFragment]: current fragList len: %d", c.fragList.Len())
+	// c.logger.Infof("[GetFragment]: fragment len: %d", len(fragments))
 
 	defer c.mut.Unlock()
 

@@ -17,6 +17,9 @@ type ViewDuration interface {
 	ViewSucceeded()
 	// ViewTimeout is called by the synchronizer when a view timed out.
 	ViewTimeout()
+
+	// 前k个区块使用100*mean作为duration，因为genesis的延迟非常小，这样导致前k个区块的过期时间非常短
+	DurationH() time.Duration
 }
 
 // NewViewDuration returns a ViewDuration that approximates the view duration based on durations of previous views.
@@ -94,6 +97,34 @@ func (v *viewDuration) ViewStarted() {
 
 // Duration returns the upper bound of the 95% confidence interval for the mean view duration.
 func (v *viewDuration) Duration() time.Duration {
+	conf := 1.96 // 95% confidence
+	dev := float64(0)
+	if v.count > 1 {
+		c := float64(v.count)
+		m2 := v.m2
+		// The standard deviation is calculated from the sum of prevM2 and m2.
+		if v.count >= v.limit {
+			c = float64(v.limit) + float64(v.count%v.limit)
+			m2 += v.prevM2
+		}
+		dev = math.Sqrt(m2 / c)
+	}
+
+	duration := v.mean + dev*conf
+	if v.max > 0 && duration > v.max { // default的max-timout=0s, 这里就不会赋值了
+		duration = v.max
+	}
+
+	// RapidFair:baseline 修改：直接用duration*10作为duration，没出错的情况一般很难超时
+	if v.mean > 0 {
+		duration = v.mean * 10
+	}
+	// RapidFair END
+
+	return time.Duration(duration * float64(time.Millisecond))
+}
+
+func (v *viewDuration) DurationH() time.Duration {
 	conf := 1.96 // 95% confidence
 	dev := float64(0)
 	if v.count > 1 {

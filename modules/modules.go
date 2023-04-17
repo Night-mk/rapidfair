@@ -40,9 +40,9 @@ type Acceptor interface {
 
 	// RapidFair 为acceptor提供额外接口方法
 	// 使用ProposedFragment确定哪些交易已经提交到Fragment
-	ProposedFragment(hotstuff.Command)
+	ProposedFragment(hotstuff.View, hotstuff.Command)
 	// 在RapidFair中，共识流程提交Block的交易时，采用这个方法
-	ProposedBlock(hotstuff.Command)
+	ProposedBlock([]hotstuff.FragmentData, hotstuff.Command)
 }
 
 //go:generate mockgen -destination=../internal/mocks/executor_mock.go -package=mocks . Executor

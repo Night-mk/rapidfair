@@ -515,7 +515,8 @@ type fixedDuration struct {
 	timeout time.Duration
 }
 
-func (d fixedDuration) Duration() time.Duration { return d.timeout }
-func (d fixedDuration) ViewStarted()            {}
-func (d fixedDuration) ViewSucceeded()          {}
-func (d fixedDuration) ViewTimeout()            {}
+func (d fixedDuration) Duration() time.Duration  { return d.timeout }
+func (d fixedDuration) ViewStarted()             {}
+func (d fixedDuration) ViewSucceeded()           {}
+func (d fixedDuration) ViewTimeout()             {}
+func (d fixedDuration) DurationH() time.Duration { return d.timeout }

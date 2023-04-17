@@ -151,8 +151,8 @@ func (cs *consensusBase) Propose(cert hotstuff.SyncInfo) {
 	}
 
 	v := cs.synchronizer.View()
-	// cs.logger.Infof("Propose View: %d \n", cs.synchronizer.View())
-	if v%100 == 0 {
+	// cs.logger.Infof("[Propose] View: %d \n", cs.synchronizer.View())
+	if v%20 == 0 {
 		cs.logger.Infof("Propose View: %d", v)
 	}
 
@@ -237,9 +237,20 @@ func (cs *consensusBase) OnPropose(proposal hotstuff.ProposeMsg) { //nolint:gocy
 	// RapidFair
 	if cs.opts.UseRapidFair() {
 		// 采用简洁验证：SimpleVerify
+		// start := time.Now()
 		if !cs.SimpleVerify(proposal.Block) {
 			cs.logger.Info("RapidFair-OnPropose: Order not verified======================")
-			return
+			// 目前假设即使验证失败也会继续
+			// return
+		}
+		// elapsed := time.Since(start)
+		// cs.logger.Info("SimpleVerify Execution time:", elapsed)
+
+		if qcBlock, ok := cs.blockChain.Get(block.QuorumCert().BlockHash()); ok {
+			// RapidFair: 使用ProposedBlock提交上一个block中的交易和fragment
+			cs.acceptor.ProposedBlock(qcBlock.FragmentData(), qcBlock.Command())
+		} else {
+			cs.logger.Info("OnPropose: Failed to fetch qcBlock")
 		}
 	}
 
@@ -274,8 +285,8 @@ func (cs *consensusBase) OnPropose(proposal hotstuff.ProposeMsg) { //nolint:gocy
 			// cs.logger.Infof("[Onpropose]: CommitRule===================")
 			cs.commit(b)
 		}
+		// cs.logger.Infof("[Onpropose]: Replica call advanceView() actively, lastvote view: %d, canAdv: %v", cs.lastVote, didAdvanceView)
 		if !didAdvanceView {
-			cs.logger.Debugf("[Onpropose]: Replica call advanceView() actively, lastvote view: %d", cs.lastVote)
 			cs.synchronizer.AdvanceView(hotstuff.NewSyncInfo().WithQC(block.QuorumCert()))
 		}
 	}()
@@ -342,7 +353,7 @@ func (cs *consensusBase) commit(block *hotstuff.Block) {
 
 	// RapidFair: baseline
 	v := block.View()
-	if v%100 == 0 { // 每100个block打印一次
+	if v%20 == 0 { // 每100个block打印一次
 		cs.logger.Debugf("success to commit block(view): %d", block.View())
 	}
 
@@ -378,7 +389,8 @@ func (cs *consensusBase) ChainLength() int {
 // 除了获取交易序列的方式以外，其他不改变
 func (cs *consensusBase) FairPropose(cert hotstuff.SyncInfo, cmd hotstuff.Command, txSeq map[hotstuff.ID]hotstuff.Command) {
 	v := cs.synchronizer.View()
-	if v%10 == 0 {
+	// cs.logger.Infof("FairPropose View: %d, Leader ID: %d\n", v, cs.opts.ID())
+	if v%20 == 0 {
 		cs.logger.Infof("FairPropose View: %d, Leader ID: %d\n", v, cs.opts.ID())
 	}
 
@@ -440,6 +452,10 @@ func (cs *consensusBase) VerifyFairness(proposedBlock *hotstuff.Block) bool {
 	txList, _ := cs.collector.ConstructTxList(hotstuff.TXList(txSeqList))
 	// 公平排序
 	finalTxSeq := orderfairness.FairOrder_Themis(txList, cs.configuration.Len(), cs.opts.ThemisGamma())
+	// start := time.Now()
+	// finalTxSeq := orderfairness.FairOrder_Themis(txList, cs.configuration.Len(), cs.opts.ThemisGamma())
+	// elapsed := time.Since(start)
+	// cs.logger.Info("FairOrder Execution time:", elapsed)
 
 	// 判断proposedTx顺序和finalTxSeq顺序是否一致
 	if len(unptc) != len(finalTxSeq) { // 先判断下长度是否一致
@@ -472,9 +488,8 @@ func (cs *consensusBase) BatchUnmarshal(cmd hotstuff.Command) []*clientpb.Comman
 func (cs *consensusBase) RapidFairPropose(cert hotstuff.SyncInfo) {
 	v := cs.synchronizer.View()
 	// cs.logger.Infof("[RapidFairPropose]: BLOCK View: %d\n", v)
-
-	if v%100 == 0 {
-		cs.logger.Infof("[RapidFairPropose] Propose View: %d", v)
+	if v%20 == 0 {
+		cs.logger.Infof("[RapidFairPropose]: BLOCK View: %d\n", v)
 	}
 
 	// 获取当前highest QC
@@ -483,16 +498,16 @@ func (cs *consensusBase) RapidFairPropose(cert hotstuff.SyncInfo) {
 		// tell the acceptor that the previous proposal succeeded.
 		if qcBlock, ok := cs.blockChain.Get(qc.BlockHash()); ok {
 			// RapidFair: 使用ProposedBlock提交上一个block中的交易
-			cs.acceptor.ProposedBlock(qcBlock.Command())
+			cs.acceptor.ProposedBlock(qcBlock.FragmentData(), qcBlock.Command())
 		} else {
-			cs.logger.Errorf("Could not find block for QC: %s", qc)
+			cs.logger.Infof("Could not find block for QC: %s", qc)
 		}
 	}
 
 	// 利用context获取交易输入
 	fragment, ok := cs.commandQueue.GetFragment(cs.synchronizer.ViewContext())
 	if !ok {
-		cs.logger.Debug("[RapidFairPropose]: No command")
+		cs.logger.Infof("[RapidFairPropose]: error No command")
 		return
 	}
 	// 计算Fragments的cmd
@@ -503,6 +518,8 @@ func (cs *consensusBase) RapidFairPropose(cert hotstuff.SyncInfo) {
 	}
 	// 计算Fragments转换的fragmentData
 	fragData := cs.fragmentToFragmentData(fragment)
+
+	// cs.logger.Infof("[RapidFairPropose]: before construct proposeMsg")
 
 	var proposal hotstuff.ProposeMsg
 	if proposer, ok := cs.impl.(ProposeRuler); ok {
@@ -529,7 +546,10 @@ func (cs *consensusBase) RapidFairPropose(cert hotstuff.SyncInfo) {
 		}
 	}
 
-	cs.logger.Infof("[RapidFairPropose]: BLOCK View: %d, Hash: %.8s\n", v, proposal.Block.Hash())
+	// cs.logger.Infof("[RapidFairPropose]: BLOCK View: %d, Hash: %.8s\n", v, proposal.Block.Hash())
+	if v%100 == 0 {
+		cs.logger.Infof("[RapidFairPropose]: BLOCK View: %d, Hash: %.8s\n", v, proposal.Block.Hash())
+	}
 
 	cs.blockChain.Store(proposal.Block)
 	// 最后还要调用configuration的Propose方法来发送proposal？网络层面的？
@@ -582,10 +602,11 @@ func (cs *consensusBase) SimpleVerify(block *hotstuff.Block) bool {
 	fragDatas := block.FragmentData()
 	for _, fd := range fragDatas {
 		virView := fd.VirView()
+		// cs.logger.Infof("[SimpleVerify]: fragment len: %d, virView: %d", len(fragDatas), virView)
 		// 使用virView在本地获取对应的Fragment
 		fragment, ok := cs.fragmentChain.LocalGetAtHeight(virView)
 		if !ok {
-			cs.logger.Infof("[SimpleVerify]: LocalGetAtHeight Fragment Failure")
+			cs.logger.Infof("[SimpleVerify]: error, LocalGetAtHeight Fragment Failure")
 			return false
 		}
 		// 对比本地Fragment是否和Leader发送的FragmentData结果一致

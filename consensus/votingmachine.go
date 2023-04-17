@@ -84,7 +84,8 @@ func (vm *VotingMachine) OnVote(vote hotstuff.VoteMsg) {
 	if vm.opts.ShouldVerifyVotesSync() {
 		vm.verifyCert(cert, block)
 	} else {
-		go vm.verifyCert(cert, block) // 启动一个新的routine运行函数
+		// vm.logger.Infof("[OnVote]: ASync")
+		go vm.verifyCert(cert, block) // 启动一个新的routine运行函数，并行执行verify
 	}
 }
 
@@ -115,8 +116,11 @@ func (vm *VotingMachine) verifyCert(cert hotstuff.PartialCert, block *hotstuff.B
 	votes := vm.verifiedVotes[cert.BlockHash()]
 	votes = append(votes, cert)
 	vm.verifiedVotes[cert.BlockHash()] = votes
+
+	// vm.logger.Infof("[OnVote]: New Leader execute")
 	// 如果vote数量小于quorum时，就不做其他处理
 	if len(votes) < vm.configuration.QuorumSize() {
+		// vm.logger.Infof("[OnVote]: vote len:%d", len(votes))
 		return
 	}
 	// vote数量超过quorum，则创建QC, QC的view其实就block.View(), hash就是block.Hash()
@@ -128,6 +132,6 @@ func (vm *VotingMachine) verifyCert(cert hotstuff.PartialCert, block *hotstuff.B
 	delete(vm.verifiedVotes, cert.BlockHash())
 	// Leader每次在接收到足够多vote最后都发送NewViewMsg来推进view（默认采用pipelined结构hotstuff？）
 	// 处理NewViewMsg的方法在synchronizer.go中，使用AdvanceView()
-	// vm.logger.Infof("[OnVote]: Leader call advanceView() actively")
+	// vm.logger.Infof("[OnVote]: New Leader call advanceView() actively")
 	vm.eventLoop.AddEvent(hotstuff.NewViewMsg{ID: vm.opts.ID(), SyncInfo: hotstuff.NewSyncInfo().WithQC(qc)})
 }

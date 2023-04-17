@@ -14,11 +14,13 @@ import (
 // 实现FairSynchronizer，让replicas对TxSeqFragment同步到同一个virtual view
 // 参考hotstuff.Synchronizer
 type FairSynchronizer struct {
-	tsfChain       modules.TSFChain
-	optimisticFO   modules.OptimisticFairOrder
-	crypto         modules.Crypto
-	configuration  modules.Configuration
-	eventLoop      *eventloop.EventLoop
+	tsfChain      modules.TSFChain
+	fragmentChain modules.FragmentChain
+	optimisticFO  modules.OptimisticFairOrder
+	crypto        modules.Crypto
+	configuration modules.Configuration
+	// eventLoop      *eventloop.EventLoop
+	eventLoopFair  *eventloop.EventLoopFair
 	leaderRotation modules.LeaderRotation
 	opts           *modules.Options
 	logger         logging.Logger
@@ -36,6 +38,7 @@ type FairSynchronizer struct {
 
 	// 记录最近一次timeout（）
 	// lastTimeout *hotstuff.TimeoutMsg
+	lastStartTime time.Time
 
 	// map of collected timeout messages per view
 	// 记录每一轮每个节点广播的Timeout消息？暂时不用
@@ -45,10 +48,11 @@ type FairSynchronizer struct {
 func (fs *FairSynchronizer) InitModule(mods *modules.Core) {
 	mods.Get(
 		&fs.tsfChain,
+		&fs.fragmentChain,
 		&fs.optimisticFO,
 		&fs.crypto,
 		&fs.configuration,
-		&fs.eventLoop,
+		&fs.eventLoopFair,
 		&fs.leaderRotation,
 		&fs.opts,
 		&fs.logger,
@@ -56,18 +60,21 @@ func (fs *FairSynchronizer) InitModule(mods *modules.Core) {
 	)
 
 	// 注册推进virtual view处理事件
-	fs.eventLoop.RegisterHandler(hotstuff.NewVirViewMsg{}, func(event any) {
+	fs.eventLoopFair.RegisterHandler(hotstuff.NewVirViewMsg{}, func(event any) {
 		fs.OnNewVirView(event.(hotstuff.NewVirViewMsg))
 	})
 
 	// 注册超时处理事件（本地）
-	fs.eventLoop.RegisterHandler(VirTimeoutEvent{}, func(event any) {
+	fs.eventLoopFair.RegisterHandler(VirTimeoutEvent{}, func(event any) {
 		timeoutView := event.(VirTimeoutEvent).VirView
 		if fs.curVirView == timeoutView {
 			fs.OnLocalTimeout()
 		}
 	})
 
+	// 初始化时，应该将Genesis的tsf和fragment分别先写入tsfChain和fragmentChain
+	fs.tsfChain.Store(hotstuff.GetGenesisTSF())
+	fs.fragmentChain.Store(hotstuff.GetGenesisFragment())
 	// 初始化highQC为genesis TxSeqFragment的QC
 	var err error
 	fs.highQC, err = fs.crypto.CreateQuorumCertTSF(hotstuff.GetGenesisTSF(), []hotstuff.PartialCert{})
@@ -101,7 +108,7 @@ func (fs *FairSynchronizer) Start(ctx context.Context) {
 	fs.virTimer = time.AfterFunc(fs.virDuration.Duration(), func() {
 		fs.cancelVirCtx()
 		// 触发VirTimeoutEvent，针对当前的VirView
-		fs.eventLoop.AddEvent(VirTimeoutEvent{fs.curVirView})
+		fs.eventLoopFair.AddEvent(VirTimeoutEvent{fs.curVirView})
 	})
 
 	go func() {
@@ -109,7 +116,9 @@ func (fs *FairSynchronizer) Start(ctx context.Context) {
 		fs.virTimer.Stop()
 	}()
 
-	if fs.curVirView == 1 { // 启动同步器的时候，所有节点都应该先在cmdCache中写入空fragment
+	fs.lastStartTime = time.Now()
+	if fs.curVirView == 1 { // 启动同步器的时候，所有节点都应该先在cmdCache中写入第一个fragment
+		// fs.logger.Infof("[vsync]: Add fragment on virView: %d", 0)
 		fs.commandQueue.AddFragment(hotstuff.GetGenesisFragment())
 	}
 	// 启动之前TSF(0)和Fragment(0)都已经存储过，因此curVirView=1时，让所有raplica运行
@@ -165,6 +174,7 @@ func (fs *FairSynchronizer) OnLocalTimeout() {
 
 // 处理事件NewVirViewMsg的函数
 func (fs *FairSynchronizer) OnNewVirView(newVirView hotstuff.NewVirViewMsg) {
+	// fs.logger.Info("[OnNewVirView]")
 	fs.AdvanceVirView(newVirView.VSync)
 }
 
@@ -196,12 +206,17 @@ func (fs *FairSynchronizer) AdvanceVirView(vsync hotstuff.SyncInfo) {
 		return
 	}
 
+	// 先停止，再reset
+	fs.virTimer.Stop()
 	// 2. 推进同步器的virtual view，推进到QC.VirView+1
 	fs.curVirView = v + 1
 	// s.lastTimeout = nil
 	// 启动一个新view: 将现在的时间记录为新virView的启动时间, viewDuration.startTime = time.Now()
 	fs.virDuration.ViewStarted()
 	duration := fs.virDuration.Duration()
+	if fs.curVirView <= 5 { // 前5个区块采用另一种duration计算方式
+		duration = fs.virDuration.DurationH()
+	}
 	fs.newVirCtx(duration)      // 以duration为间隔时间，创建新virView的上下文
 	fs.virTimer.Reset(duration) // 以duration的时间间隔重置timer（超时触发方法）
 	fs.logger.Debugf("Advanced to virtual view %d", fs.curVirView)

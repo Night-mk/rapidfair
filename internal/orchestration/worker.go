@@ -225,8 +225,9 @@ func (w *Worker) createReplica(opts *orchestrationpb.ReplicaOpts) (*replica.Repl
 		// RapidFair
 		fragmentchain.New(),
 		tsfchain.New(),
-		optimisticfairorder.New(),
 		vsync,
+		optimisticfairorder.New(),
+		eventloop.NewEventLoopFair(1000), // 为optimisticFairOrder流程增加独立的eventloop处理机制
 	)
 
 	builder.Options().SetThemisGamma(opts.GetThemisGamma())
@@ -301,11 +302,13 @@ func (w *Worker) stopReplicas(req *orchestrationpb.StopReplicaRequest) (*orchest
 	res := &orchestrationpb.StopReplicaResponse{
 		Hashes: make(map[uint32][]byte),
 	}
+	fmt.Printf("[Worker]: stopReplicas \n")
 	for _, id := range req.GetIDs() {
 		r, ok := w.replicas[hotstuff.ID(id)]
 		if !ok {
 			return nil, status.Errorf(codes.NotFound, "The replica with id %d was not found.", id)
 		}
+		fmt.Printf("[Worker]: stopReplica: %d\n", id)
 		r.Stop()
 		res.Hashes[id] = r.GetHash()
 		// TODO: return test results
@@ -336,6 +339,7 @@ func (w *Worker) startClients(req *orchestrationpb.StartClientRequest) (*orchest
 			Timeout:          opts.GetTimeout().AsDuration(),
 		}
 		mods := modules.NewBuilder(hotstuff.ID(opts.GetID()), nil)
+		// client初始化自己的eventloop
 		mods.Add(eventloop.New(1000))
 
 		if w.measurementInterval > 0 {

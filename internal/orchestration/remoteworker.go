@@ -96,6 +96,7 @@ func (w RemoteWorker) StartClient(req *orchestrationpb.StartClientRequest) (res 
 
 // StopClient requests that the remote worker stops the specified clients.
 func (w RemoteWorker) StopClient(req *orchestrationpb.StopClientRequest) (res *orchestrationpb.StopClientResponse, err error) {
+	fmt.Println("[Remoteworker]: call StopClient RPC")
 	msg, err := w.rpc(req)
 	if err != nil {
 		return nil, err

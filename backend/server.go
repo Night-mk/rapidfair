@@ -26,6 +26,7 @@ type Server struct {
 	blockChain    modules.BlockChain
 	configuration modules.Configuration
 	eventLoop     *eventloop.EventLoop
+	eventLoopFair *eventloop.EventLoopFair // RapidFair: 为OFO增加单独的事件调用流
 	logger        logging.Logger
 
 	gorumsSrv *gorums.Server
@@ -35,6 +36,7 @@ type Server struct {
 func (srv *Server) InitModule(mods *modules.Core) {
 	mods.Get(
 		&srv.eventLoop,
+		&srv.eventLoopFair,
 		&srv.configuration,
 		&srv.blockChain,
 		&srv.logger,
@@ -248,8 +250,9 @@ func (impl *serviceImpl) MultiCollect(ctx gorums.ServerCtx, mc *hotstuffpb.MColl
 		impl.srv.logger.Infof("Failed to get client ID: %v", err)
 		return
 	}
-	// AddEvent增加事件MultiCollectMsg传输给eventLoop处理
-	impl.srv.eventLoop.AddEvent(mcMsg)
+	// AddEvent增加事件MultiCollectMsg传输给eventLoopFair处理
+	// impl.srv.eventLoop.AddEvent(mcMsg)
+	impl.srv.eventLoopFair.AddEvent(mcMsg)
 }
 
 // RapidFair: 处理接收到的 proto.PreNotifyMsg
@@ -262,6 +265,6 @@ func (impl *serviceImpl) PreNotify(ctx gorums.ServerCtx, pn *hotstuffpb.PreNotif
 		impl.srv.logger.Infof("Failed to get client ID: %v", err)
 		return
 	}
-	// AddEvent增加事件PreNotifyMsg传输给eventLoop处理
-	impl.srv.eventLoop.AddEvent(pnMsg)
+	// AddEvent增加事件PreNotifyMsg传输给eventLoopFair处理
+	impl.srv.eventLoopFair.AddEvent(pnMsg)
 }

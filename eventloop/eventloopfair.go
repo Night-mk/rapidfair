@@ -13,14 +13,14 @@ import (
 	"time"
 )
 
-// EventHandler processes an event.
-type EventHandler func(event any)
+// RapidFair
+// EventLoopFair类为optimistic fair ordering提供另外的event调用
 
 // EventLoop accepts events of any type and executes relevant event handlers.
 // It supports registering both observers and handlers based on the type of event that they accept.
 // The difference between them is that there can be many observers per event type, but only one handler,
 // and the handler is executed last.
-type EventLoop struct {
+type EventLoopFair struct {
 	mut sync.Mutex
 
 	eventQ        queue // 事件队列
@@ -34,8 +34,8 @@ type EventLoop struct {
 }
 
 // New returns a new event loop with the requested buffer size.
-func New(bufferSize uint) *EventLoop {
-	el := &EventLoop{
+func NewEventLoopFair(bufferSize uint) *EventLoopFair {
+	el := &EventLoopFair{
 		eventQ:        newQueue(bufferSize),
 		waitingEvents: make(map[reflect.Type][]any),
 		handlers:      make(map[reflect.Type]EventHandler),
@@ -49,7 +49,7 @@ func New(bufferSize uint) *EventLoop {
 // There can be only one handler per event type, and the handler is executed after any observers.
 // eventType: 输入事件类型，handler: 输入事件处理函数
 // 在hanlders里存储注册的事件
-func (el *EventLoop) RegisterHandler(eventType any, handler EventHandler) {
+func (el *EventLoopFair) RegisterHandler(eventType any, handler EventHandler) {
 	el.handlers[reflect.TypeOf(eventType)] = handler
 }
 
@@ -57,13 +57,13 @@ func (el *EventLoop) RegisterHandler(eventType any, handler EventHandler) {
 // The observers are executed before the handler.
 //
 //	注册观察者事件，在observer中存储事件（通常用于测试）
-func (el *EventLoop) RegisterObserver(eventType any, observer EventHandler) {
+func (el *EventLoopFair) RegisterObserver(eventType any, observer EventHandler) {
 	t := reflect.TypeOf(eventType)
 	el.observers[t] = append(el.observers[t], observer)
 }
 
 // AddEvent adds an event to the event queue. 在eventQ里增加事件
-func (el *EventLoop) AddEvent(event any) {
+func (el *EventLoopFair) AddEvent(event any) {
 	// fmt.Println("Add event!!")
 	if event != nil {
 		el.eventQ.push(event)
@@ -71,7 +71,7 @@ func (el *EventLoop) AddEvent(event any) {
 }
 
 // Run runs the event loop. A context object can be provided to stop the event loop.
-func (el *EventLoop) Run(ctx context.Context) {
+func (el *EventLoopFair) Run(ctx context.Context) {
 loop:
 	for {
 		event, ok := el.eventQ.pop()
@@ -99,7 +99,7 @@ loop:
 }
 
 // Tick processes a single event. Returns true if an event was handled.
-func (el *EventLoop) Tick() bool {
+func (el *EventLoopFair) Tick() bool {
 	event, ok := el.eventQ.pop()
 	if !ok {
 		return false
@@ -115,7 +115,7 @@ func (el *EventLoop) Tick() bool {
 }
 
 // processEvent dispatches the event to the correct handler.
-func (el *EventLoop) processEvent(event any) {
+func (el *EventLoopFair) processEvent(event any) {
 	t := reflect.TypeOf(event)
 	defer el.dispatchDelayedEvents(t)
 
@@ -134,7 +134,7 @@ func (el *EventLoop) processEvent(event any) {
 	}
 }
 
-func (el *EventLoop) dispatchDelayedEvents(t reflect.Type) {
+func (el *EventLoopFair) dispatchDelayedEvents(t reflect.Type) {
 	el.mut.Lock()
 	if delayed, ok := el.waitingEvents[t]; ok {
 		for _, event := range delayed {
@@ -148,7 +148,7 @@ func (el *EventLoop) dispatchDelayedEvents(t reflect.Type) {
 // DelayUntil allows us to delay handling of an event until after another event has happened.
 // The eventType parameter decides the type of event to wait for, and it should be the zero value
 // of that event type. The event parameter is the event that will be delayed.
-func (el *EventLoop) DelayUntil(eventType, event any) {
+func (el *EventLoopFair) DelayUntil(eventType, event any) {
 	if eventType == nil || event == nil {
 		return
 	}
@@ -160,21 +160,21 @@ func (el *EventLoop) DelayUntil(eventType, event any) {
 	el.mut.Unlock()
 }
 
-type ticker struct {
-	interval time.Duration
-	callback func(time.Time) any
-	cancel   context.CancelFunc
-}
+// type ticker struct {
+// 	interval time.Duration
+// 	callback func(time.Time) any
+// 	cancel   context.CancelFunc
+// }
 
-type startTickerEvent struct {
-	tickerID int
-}
+// type startTickerEvent struct {
+// 	tickerID int
+// }
 
 // AddTicker adds a ticker with the specified interval and returns the ticker id.
 // The ticker will send the specified event on the event loop at regular intervals.
 // The returned ticker id can be used to remove the ticker with RemoveTicker.
 // The ticker will not be started before the event loop is running.
-func (el *EventLoop) AddTicker(interval time.Duration, callback func(tick time.Time) (event any)) int {
+func (el *EventLoopFair) AddTicker(interval time.Duration, callback func(tick time.Time) (event any)) int {
 	el.mut.Lock()
 
 	id := el.tickerID
@@ -199,7 +199,7 @@ func (el *EventLoop) AddTicker(interval time.Duration, callback func(tick time.T
 // RemoveTicker removes the ticker with the specified id.
 // If the ticker was removed, RemoveTicker will return true.
 // If the ticker does not exist, false will be returned instead.
-func (el *EventLoop) RemoveTicker(id int) bool {
+func (el *EventLoopFair) RemoveTicker(id int) bool {
 	el.mut.Lock()
 	defer el.mut.Unlock()
 
@@ -212,7 +212,7 @@ func (el *EventLoop) RemoveTicker(id int) bool {
 	return true
 }
 
-func (el *EventLoop) startTicker(ctx context.Context, id int) {
+func (el *EventLoopFair) startTicker(ctx context.Context, id int) {
 	// lock the mutex such that the ticker cannot be removed until we have started it
 	el.mut.Lock()
 	defer el.mut.Unlock()
@@ -224,7 +224,7 @@ func (el *EventLoop) startTicker(ctx context.Context, id int) {
 	go el.runTicker(ctx, ticker)
 }
 
-func (el *EventLoop) runTicker(ctx context.Context, ticker *ticker) {
+func (el *EventLoopFair) runTicker(ctx context.Context, ticker *ticker) {
 	t := time.NewTicker(ticker.interval)
 	defer t.Stop()
 

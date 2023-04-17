@@ -101,9 +101,32 @@ func GroupByTimeInterval(startTimes *StartTimes, m MeasurementMap, interval time
 		groups      []MeasurementGroup        // the groups we are creating
 		currentTime time.Duration             // the start of the current time interval
 	)
+	// RapidFair:计算每个replica的MeasurementMap中数据数量的众数
+	if len(m.m) > 1 {
+		mmLenArr := make([]int, 0)
+		for _, measurements := range m.m {
+			mmLenArr = append(mmLenArr, len(measurements))
+			// fmt.Printf("MeasurementMap.m[ID=%d] len: %d\n", k, len(measurements))
+		}
+		// 计算众数
+		modeNum := CalMode(mmLenArr)
+		// 记录数量不属于众数的MeasurementMap.m，之后删除
+		delIndex := make([]uint32, 0)
+		for k, measurements := range m.m {
+			if len(measurements) != modeNum {
+				delIndex = append(delIndex, k)
+			}
+		}
+		if len(delIndex) > 0 {
+			for _, v := range delIndex {
+				delete(m.m, v)
+			}
+		}
+	}
 	for k, measurements := range m.m {
 		fmt.Printf("MeasurementMap.m[ID=%d] len: %d\n", k, len(measurements))
 	}
+	//
 	for {
 		var (
 			i         int                                   // index into indices
@@ -159,6 +182,8 @@ func TimeAndAverage(groups []MeasurementGroup, getValue func(Measurement) (float
 	all_num := uint64(0)           // 计算所有测量结果的数量
 	all_blockLatency := float64(0) // 计算所有blockLatency的总和
 	finavg_blockLatency := float64(0)
+	max_tps := float64(0)
+	min_latency := float64(100000000)
 	// 【在后续多server上部署的时候可能需要修改！！】 希望去掉偏离比较大的前k个结果，通常是前3个区块的结果
 	badResultBlocks := uint64(3)
 	nodeNum := uint64(5)
@@ -195,6 +220,12 @@ func TimeAndAverage(groups []MeasurementGroup, getValue func(Measurement) (float
 					all_sum += v * float64(n)
 					blockLatency := GetBlockLatency(measurement)
 					all_blockLatency += blockLatency
+					if max_tps < v {
+						max_tps = v
+					}
+					if min_latency > blockLatency {
+						min_latency = blockLatency
+					}
 				}
 			}
 		}
@@ -227,8 +258,8 @@ func TimeAndAverage(groups []MeasurementGroup, getValue func(Measurement) (float
 				finavg_blockLatency = all_blockLatency / float64(num)
 				fmt.Println("")
 				fmt.Println("tps num: ", num)
-				fmt.Printf("avg tps: %.4f tx/s\n", finavg)
-				fmt.Printf("avg block latency: %.4f ms, avg hotstuff latency: %.4f ms\n", finavg_blockLatency, finavg_blockLatency*3)
+				fmt.Printf("avg tps: %.4f tx/s, avg block latency: %.4f ms, avg hotstuff latency: %.4f ms\n", finavg, finavg_blockLatency, finavg_blockLatency*3)
+				fmt.Printf("max tps: %.4f tx/s, lowest block latency: %.4f ms, lowest 3-block latency: %.4f ms \n", max_tps, min_latency, min_latency*3)
 			}
 		}
 	}
@@ -275,4 +306,19 @@ func CSVPlot(filename string, headers []string, plot func() plotter.XYer) error 
 	}
 	wr.Flush()
 	return f.Close()
+}
+
+// 计算众数
+func CalMode(arr []int) int {
+	var maxCount int
+	var mode int
+	countMap := make(map[int]int)
+	for _, num := range arr {
+		countMap[num]++
+		if countMap[num] > maxCount {
+			maxCount = countMap[num]
+			mode = num
+		}
+	}
+	return mode
 }

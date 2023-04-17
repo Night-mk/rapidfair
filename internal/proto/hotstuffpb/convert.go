@@ -159,6 +159,13 @@ func BlockToProto(block *hotstuff.Block) *Block {
 
 // BlockFromProto converts a hotstuffpb.Block to a consensus.Block.
 func BlockFromProto(block *Block) *hotstuff.Block {
+	// 打印block的数据大小
+	// blockSize, error := GetSize(block)
+	// if error != nil {
+	// 	fmt.Printf("GetSize error: %v", error)
+	// }
+	// fmt.Printf("Block Message size: %d bytes\n", blockSize)
+
 	var p hotstuff.Hash
 	copy(p[:], block.GetParent())
 	// RapidFair: baseline 反序列化TxSeq, []bytes转为map[uint32][]byte
@@ -318,6 +325,12 @@ func CollectToProto(col hotstuff.CollectTxSeq) *CollectTxSeq {
 
 // 将proto数据转换为hotstuff中可以处理的数据结构
 func CollectFromProto(col *CollectTxSeq) hotstuff.CollectTxSeq {
+	// 打印collect消息的size
+	// size, error := GetSize(col)
+	// if error != nil {
+	// 	fmt.Printf("GetSize error: %v", error)
+	// }
+	// fmt.Printf("Collect Message size: %d bytes\n", size)
 	// command转[]byte到string
 	command := hotstuff.Command(col.GetTxSeq())
 	syncInfo := SyncInfoFromProto(col.GetSyncInfo())
@@ -351,6 +364,13 @@ func MultiCollectToProto(mc hotstuff.MultiCollectMsg) *MCollect {
 
 // 将proto转为hotstuff.MultiCollect类型
 func MultiCollectFromProto(mc *MCollect) hotstuff.MultiCollectMsg {
+	// 打印collect消息的size
+	// size, error := GetSize(mc)
+	// if error != nil {
+	// 	fmt.Printf("GetSize error: %v", error)
+	// }
+	// fmt.Printf("RapidFair Collect Message size: %d bytes\n", size)
+
 	txSeq := hotstuff.Command(mc.GetTxSeq())
 	pc := PartialCertFromProto(mc.GetPC())
 	// return hotstuff.NewMultiCollect(hotstuff.View(mc.GetVirView()), txSeq, pc)
@@ -384,6 +404,13 @@ func PreNotifyToProto(pn hotstuff.PreNotifyMsg) *PreNotifyMsg {
 
 // 将proto转为hotstuff.PreNotify类型
 func PreNotifyFromProto(pn *PreNotifyMsg) hotstuff.PreNotifyMsg {
+	// 打印PreNotifyMsg消息的size
+	// size, error := GetSize(pn)
+	// if error != nil {
+	// 	fmt.Printf("GetSize error: %v", error)
+	// }
+	// fmt.Printf("RapidFair PreNotifyMsg Message size: %d bytes\n", size)
+
 	tsh := make(hotstuff.TXList)
 	if len(pn.TxSeqFragment.GetTxSeqHash()) > 0 {
 		for k, v := range pn.TxSeqFragment.GetTxSeqHash() {
@@ -440,4 +467,13 @@ func FragmentDataFromProto(fd *FragmentData) *hotstuff.FragmentData {
 		hotstuff.Command(fd.GetMissEdge()),
 		updateSeqHash,
 	)
+}
+
+// 返回消息大小
+func GetSize(msg proto.Message) (int, error) {
+	data, err := proto.Marshal(msg)
+	if err != nil {
+		return 0, err
+	}
+	return len(data), nil
 }

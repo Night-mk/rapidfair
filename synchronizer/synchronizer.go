@@ -43,6 +43,9 @@ type Synchronizer struct {
 
 	// map of collected timeout messages per view
 	timeouts map[hotstuff.View]map[hotstuff.ID]hotstuff.TimeoutMsg
+
+	// 计算下view推进的时间
+	lastStartTime time.Time
 }
 
 // InitModule initializes the synchronizer.
@@ -122,6 +125,7 @@ func (s *Synchronizer) Start(ctx context.Context) {
 		s.timer.Stop() // 这里调用stop可以取消调用AddEvent(TimeoutEvent{})
 	}()
 
+	s.lastStartTime = time.Now()
 	// start the initial proposal
 	// Leader首先提出genesisblock
 	if s.currentView == 1 && s.leaderRotation.GetLeader(s.currentView) == s.opts.ID() {
@@ -373,6 +377,9 @@ func (s *Synchronizer) AdvanceView(syncInfo hotstuff.SyncInfo) {
 	s.duration.ViewStarted()
 
 	duration := s.duration.Duration()
+	if s.currentView <= 5 {
+		duration = s.duration.DurationH()
+	}
 	// cancel the old view context and set up the next one
 	s.newCtx(duration)
 	s.timer.Reset(duration)
@@ -381,10 +388,18 @@ func (s *Synchronizer) AdvanceView(syncInfo hotstuff.SyncInfo) {
 	// ViewChangeEvent的处理在./metrics/timeouts.go，处理只做了numViews++
 	s.eventLoop.AddEvent(ViewChangeEvent{View: s.currentView, Timeout: timeout})
 
+	// elapsed := time.Since(s.lastStartTime)
+	// s.logger.Info("ConsensusSync Execution time:", elapsed)
+	// s.lastStartTime = time.Now()
+
 	// RapidFair: baseline 使用参数控制在order fairness模式下调用collect
 	// 先collect，之后再propose
 	leader := s.leaderRotation.GetLeader(s.currentView)
 	if leader == s.opts.ID() { // 如果当前节点是leader
+		// elapsed := time.Since(s.lastStartTime)
+		// fmt.Println("Leader: ConsensusSync Execution time:", elapsed)
+		// s.lastStartTime = time.Now()
+
 		s.logger.Debugf("leader advanced to view %d", s.currentView)
 		if s.opts.UseFairOrder() {
 			s.logger.Debugf("[FairOrder] AdvanceView(): View in synchronizer: %d", s.currentView)
@@ -398,6 +413,10 @@ func (s *Synchronizer) AdvanceView(syncInfo hotstuff.SyncInfo) {
 			s.consensus.Propose(syncInfo)
 		}
 	} else if replica, ok := s.configuration.Replica(leader); ok {
+		// elapsed := time.Since(s.lastStartTime)
+		// fmt.Println("Replica: ConsensusSync Execution time:", elapsed)
+		// s.lastStartTime = time.Now()
+
 		s.logger.Debugf("Replica advanced to view %d", s.currentView)
 		replica.NewView(syncInfo) // 这里调用了./backend/config.go中的NewView
 	}

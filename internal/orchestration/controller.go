@@ -96,6 +96,8 @@ func (e *Experiment) Run() (err error) {
 	e.Logger.Info("Stopping clients...")
 	err = e.stopClients()
 	if err != nil {
+		// 有错误打印一下
+		e.Logger.Infof("failed to stop clients: %w", err)
 		return fmt.Errorf("failed to stop clients: %w", err)
 	}
 
