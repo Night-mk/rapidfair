@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/relab/hotstuff"
 	"github.com/relab/hotstuff/consensus/orderfairness"
@@ -67,6 +68,9 @@ type consensusBase struct {
 
 	marshaler   proto.MarshalOptions   // 序列化（来自proto）
 	unmarshaler proto.UnmarshalOptions // 反序列化
+
+	gStartTime   time.Time // micro-benchmark：测试Consensus时间
+	totalLatency float64   // 计算总延迟
 }
 
 // New returns a new Consensus instance based on the given Rules implementation.
@@ -155,6 +159,14 @@ func (cs *consensusBase) Propose(cert hotstuff.SyncInfo) {
 	if v%20 == 0 {
 		cs.logger.Infof("Propose View: %d", v)
 	}
+	if cs.opts.OnlyRunConsensus() {
+		// 计算Hotstuff平均Block Latency
+		if v <= 10 {
+			cs.gStartTime = time.Now()
+		} else {
+			cs.CalConsensusLatency()
+		}
+	}
 
 	var proposal hotstuff.ProposeMsg
 	if proposer, ok := cs.impl.(ProposeRuler); ok {
@@ -228,9 +240,12 @@ func (cs *consensusBase) OnPropose(proposal hotstuff.ProposeMsg) { //nolint:gocy
 	// RapidFair-baseline增加verification流程verifyFairness
 	// 尝试去掉公平排序的验证阶段测试下性能
 	if cs.opts.UseFairOrder() {
-		if !cs.VerifyFairness(proposal.Block) {
-			cs.logger.Info("OnPropose: Order not verified")
-			return
+		// 除了leader之外的节点才需要验证
+		if proposal.ID != cs.opts.ID() {
+			if !cs.VerifyFairness(proposal.Block) {
+				cs.logger.Info("OnPropose: Order not verified")
+				return
+			}
 		}
 	}
 
@@ -315,6 +330,9 @@ func (cs *consensusBase) OnPropose(proposal hotstuff.ProposeMsg) { //nolint:gocy
 		cs.handel.Begin(pc)
 		return
 	}
+
+	// cs.logger.Infof("Start to vote!")
+
 	// 重点！此时replica将vote发送给下一个view的leader来触发onVote()
 	// 这里返回下一个view的leader， cs.lastVote + 1是当前view+1
 	leaderID := cs.leaderRotation.GetLeader(cs.lastVote + 1)
@@ -618,4 +636,18 @@ func (cs *consensusBase) SimpleVerify(block *hotstuff.Block) bool {
 		}
 	}
 	return isFair
+}
+
+// 测试Consensus平均时间
+func (cs *consensusBase) CalConsensusLatency() {
+	duration := time.Since(cs.gStartTime)
+	roundLatency := float64(duration) / float64(time.Millisecond)
+	round := cs.synchronizer.View()
+	// cs.logger.Info("Consensus round latency:", roundLatency, "; virtual view: ", round)
+	cs.gStartTime = time.Now()
+	cs.totalLatency += roundLatency
+	if round%20 == 0 {
+		avgLatency := cs.totalLatency / float64(round-10)
+		cs.logger.Info("Consensus avg latency time:", avgLatency, "; virtual view: ", round)
+	}
 }

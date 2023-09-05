@@ -11,6 +11,7 @@ require (
 	github.com/mattn/go-isatty v0.0.14
 	github.com/mitchellh/go-homedir v1.1.0
 	github.com/mroth/weightedrand v0.4.1
+	github.com/orcaman/concurrent-map/v2 v2.0.1
 	github.com/relab/gorums v0.7.1-0.20220307181651-94a8af8e467c
 	github.com/relab/iago v0.0.0-20220416090249-bf984205c7a8
 	github.com/relab/wrfs v0.0.0-20220416082020-a641cd350078
@@ -19,13 +20,15 @@ require (
 	go-hep.org/x/hep v0.31.1
 	go.uber.org/multierr v1.8.0
 	go.uber.org/zap v1.21.0
-	golang.org/x/exp v0.0.0-20220613132600-b0d781184e0d
+	golang.org/x/exp v0.0.0-20230425010034-47ecfdc1ba53
 	golang.org/x/time v0.0.0-20220411224347-583f2d630306
-	gonum.org/v1/plot v0.11.0
+	gonum.org/v1/plot v0.12.0
 	google.golang.org/genproto v0.0.0-20220525015930-6ca3db687a9d
 	google.golang.org/grpc v1.46.2
 	google.golang.org/protobuf v1.28.0
 )
+
+require golang.org/x/crypto v0.0.0-20220411220226-7b82a4e95df4 // indirect
 
 require (
 	git.sr.ht/~sbinet/gg v0.3.1 // indirect
@@ -39,9 +42,9 @@ require (
 	github.com/docker/go-connections v0.4.0 // indirect
 	github.com/docker/go-units v0.4.0 // indirect
 	github.com/fsnotify/fsnotify v1.5.3 // indirect
-	github.com/go-fonts/liberation v0.2.0 // indirect
-	github.com/go-latex/latex v0.0.0-20210823091927-c0d11ff05a81 // indirect
-	github.com/go-pdf/fpdf v0.6.0 // indirect
+	github.com/go-fonts/liberation v0.3.0 // indirect
+	github.com/go-latex/latex v0.0.0-20230307184459-12ec69307ad9 // indirect
+	github.com/go-pdf/fpdf v0.8.0 // indirect
 	github.com/gogo/protobuf v1.3.2 // indirect
 	github.com/golang/freetype v0.0.0-20170609003504-e2365dfdc4a0 // indirect
 	github.com/golang/protobuf v1.5.2 // indirect
@@ -72,16 +75,15 @@ require (
 	github.com/subosito/gotenv v1.2.0 // indirect
 	go.uber.org/atomic v1.9.0 // indirect
 	go.uber.org/goleak v1.1.12 // indirect
-	golang.org/x/crypto v0.0.0-20220411220226-7b82a4e95df4 // indirect
-	golang.org/x/image v0.0.0-20220413100746-70e8d0d3baa9 // indirect
-	golang.org/x/mod v0.6.0-dev.0.20220106191415-9b9b3d81d5e3 // indirect
-	golang.org/x/net v0.0.0-20220524220425-1d687d428aca // indirect
-	golang.org/x/sync v0.0.0-20210220032951-036812b2e83c // indirect
-	golang.org/x/sys v0.0.0-20220520151302-bc2c85ada10a // indirect
-	golang.org/x/text v0.3.7 // indirect
-	golang.org/x/tools v0.1.10 // indirect
-	golang.org/x/xerrors v0.0.0-20220411194840-2f41105eb62f // indirect
-	gonum.org/v1/gonum v0.11.0 // indirect
+	// golang.org/x/crypto v0.0.0-20220411220226-7b82a4e95df4 // indirect
+	golang.org/x/image v0.7.0 // indirect
+	golang.org/x/mod v0.10.0 // indirect
+	golang.org/x/net v0.9.0 // indirect
+	golang.org/x/sync v0.1.0 // indirect
+	golang.org/x/sys v0.7.0 // indirect
+	golang.org/x/text v0.9.0 // indirect
+	golang.org/x/tools v0.8.0 // indirect
+	gonum.org/v1/gonum v0.13.0 // indirect
 	google.golang.org/grpc/cmd/protoc-gen-go-grpc v1.2.0 // indirect
 	gopkg.in/check.v1 v1.0.0-20200227125254-8fa46927fb4f // indirect
 	gopkg.in/ini.v1 v1.66.4 // indirect

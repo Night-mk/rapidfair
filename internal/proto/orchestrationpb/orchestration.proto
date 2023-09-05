@@ -60,6 +60,9 @@ message ReplicaOpts {
   float ThemisGamma = 24;
   // 增加对RapidFair协议的控制
   bool UseRapidFair = 25;
+  // 增加对OFO和Consensus的单独控制
+  bool OnlyRunOFO = 26;
+  bool OnlyRunConsensus = 27;
 }
 
 // ReplicaInfo is the information that the replicas need about each other.

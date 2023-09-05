@@ -91,6 +91,9 @@ func init() {
 	runCmd.Flags().Float32("themis-gamma", 1.0, "gamma parameter in Themis")
 	// 增加是否执行RapidFair的参数
 	runCmd.Flags().Bool("userapidfair", false, "enable order-fairness protocol (RapidFair)")
+	// 增加是否单独执行OFO或Consensus的参数
+	runCmd.Flags().Bool("onlyRunOFO", false, "only run OFO in RapidFair")
+	runCmd.Flags().Bool("onlyRunConsensus", false, "only run Consensus in RapidFair")
 
 	err := viper.BindPFlags(runCmd.Flags())
 	if err != nil {
@@ -133,6 +136,8 @@ func runController() {
 			UseFairOrder:     viper.GetBool("usefairorder"),
 			ThemisGamma:      float32(viper.GetFloat64("themis-gamma")),
 			UseRapidFair:     viper.GetBool("userapidfair"),
+			OnlyRunOFO:       viper.GetBool("onlyRunOFO"),
+			OnlyRunConsensus: viper.GetBool("onlyRunConsensus"),
 		},
 		ClientOpts: &orchestrationpb.ClientOpts{
 			UseTLS:           true,
@@ -153,6 +158,8 @@ func runController() {
 	hosts := viper.GetStringSlice("hosts")
 	exePath := viper.GetString("exe")
 
+	fmt.Println("ssh-config path: ", viper.GetString("ssh-config"))
+	fmt.Println("hosts: ", hosts)
 	g, err := iago.NewSSHGroup(hosts, viper.GetString("ssh-config"))
 	checkf("failed to connect to remote hosts: %v", err)
 
@@ -191,14 +198,18 @@ func runController() {
 		experiment.Hosts["localhost"] = worker
 	}
 
+	// 配置远程节点资源
 	experiment.HostConfigs = make(map[string]orchestration.HostConfig)
 
 	var hostConfigs []orchestration.HostConfig
 
 	err = viper.UnmarshalKey("hosts-config", &hostConfigs)
 	checkf("failed to unmarshal hosts-config: %v", err)
+	fmt.Println("hostConfigs: ", hostConfigs)
 
 	for _, cfg := range hostConfigs {
+		// exp.HostConfigs = Map<name,cfg> 用配置的name作为ID映射配置
+		// Map<hoststuff_worker_1, cfg>
 		experiment.HostConfigs[cfg.Name] = cfg
 	}
 

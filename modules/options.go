@@ -16,9 +16,11 @@ type Options struct {
 	sharedRandomSeed   int64
 	connectionMetadata map[string]string
 
-	useFairOrder bool    // RapidFair: baseline 控制是否使用order-fairness算法
-	themisGamma  float32 // RapidFair: baseline Themis协议gamma参数
-	useRapidFair bool    // RapidFair 控制是否使用RapidFair算法
+	useFairOrder     bool    // RapidFair: baseline 控制是否使用order-fairness算法
+	themisGamma      float32 // RapidFair: baseline Themis协议gamma参数
+	useRapidFair     bool    // RapidFair: 控制是否使用RapidFair算法
+	onlyRunOFO       bool    // RapidFair: micro-benchmark单独执行OFO测试
+	onlyRunConsensus bool    // RapidFair: micro-benchmark单独执行Consensus测试
 }
 
 // ID returns the ID.
@@ -110,4 +112,20 @@ func (opts *Options) UseRapidFair() bool {
 
 func (opts *Options) SetUseRapidFair() {
 	opts.useRapidFair = true
+}
+
+func (opts *Options) OnlyRunOFO() bool {
+	return opts.onlyRunOFO
+}
+
+func (opts *Options) OnlyRunConsensus() bool {
+	return opts.onlyRunConsensus
+}
+
+func (opts *Options) SetOnlyRunOFO(runOFO bool) {
+	opts.onlyRunOFO = runOFO
+}
+
+func (opts *Options) SetOnlyRunConsensus(runConsensus bool) {
+	opts.onlyRunConsensus = runConsensus
 }

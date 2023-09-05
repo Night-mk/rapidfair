@@ -2,6 +2,7 @@ package consensus
 
 import (
 	"sync"
+	"time"
 
 	"github.com/relab/hotstuff"
 	"github.com/relab/hotstuff/consensus/orderfairness"
@@ -42,6 +43,11 @@ type CollectMachine struct {
 	// orderedCommand hotstuff.Command                                   // 存储公平排序后的交易序列
 	marshaler   proto.MarshalOptions   // 序列化（来自proto）
 	unmarshaler proto.UnmarshalOptions // 反序列化
+
+	// 计算Themis的整体和computation latency
+	gStartTime        time.Time
+	totalLatency      float64
+	totalOrderLatency float64
 }
 
 // 创建一个新NewCollectMachine
@@ -159,7 +165,8 @@ func (cm *CollectMachine) OnCollect(col hotstuff.CollectMsg) {
 	newView := highQcView + 1
 	// currentView := cm.synchronizer.View()
 	syncInfo := txSeq.SyncInfo()
-	cm.logger.Debugf("OnCollect(%d): view=%d", col.ID, txSeq.View())
+	// cm.logger.Infof("Leader OnCollect(%d): view=%d", col.ID, txSeq.View())
+
 	// 发送collectMsg的节点也应该缓存一下
 	// 1. 判断消息的view是否和节点本地的view一致
 	// 首先判断msg消息中view是否<=当前节点最新block的view+1
@@ -179,10 +186,36 @@ func (cm *CollectMachine) OnCollect(col hotstuff.CollectMsg) {
 
 	// collect交易序列数量不等于quorum时不能执行公平排序
 	if len(cm.collectedTxSeq[newView]) != cm.configuration.QuorumSizeFair() {
+		// cm.logger.Infof("OnCollect(): should return")
 		return
 	}
 	// 2. 计算公平排序序列（考虑同步 or 异步）
+	// odc := cm.FairOrder(hotstuff.TXList(cm.collectedTxSeq[newView]))
+	// 补充：计算Themis consensus latency & fair order computation latency
+	// if cm.opts.OnlyRunOFO() {
+	round := cm.synchronizer.View()
+	if round <= 1 {
+		cm.totalOrderLatency = 0
+	}
+	if round <= 10 {
+		cm.gStartTime = time.Now()
+	} else {
+		cm.CalThemisLatency()
+	}
+	start := time.Now()
 	odc := cm.FairOrder(hotstuff.TXList(cm.collectedTxSeq[newView]))
+	elapsed := time.Since(start)
+	orderLatency := float64(elapsed) / float64(time.Millisecond)
+	cm.totalOrderLatency += orderLatency * 2
+	if round%20 == 0 {
+		avgLatency := cm.totalOrderLatency / float64(round)
+		cm.logger.Info("Avg ALL FairOrder Computation time:", avgLatency, "; virtual view: ", round)
+	}
+	// } else {
+	// 	odc := cm.FairOrder(hotstuff.TXList(cm.collectedTxSeq[newView]))
+	// }
+	// 补充测试：end
+
 	// 3. 公平排序好交易之后，调用FairPropose(cert, cmd)
 	// OnCollect也只有leader能处理
 	// odc := cm.orderedCommand
@@ -222,12 +255,12 @@ func (cm *CollectMachine) FairOrder(cTxSeq hotstuff.TXList) hotstuff.Command {
 		}
 		cm.logger.Infof("Run [FairOrder]: len(collectedTxSeq)=%d, QuorumSize=%d, nodeNum=%d, gamma=%f, len(txList[])=%v\n", len(cTxSeq), cm.configuration.QuorumSize(), cm.configuration.Len(), cm.opts.ThemisGamma(), alltxListlen)
 	*/
-	/*
-		start := time.Now()
-		finalTxSeq := orderfairness.FairOrder_Themis(txList, cm.configuration.Len(), cm.opts.ThemisGamma())
-		elapsed := time.Since(start)
-		cm.logger.Info("FairOrder Execution time:", elapsed)
-	*/
+
+	// start := time.Now()
+	// finalTxSeq := orderfairness.FairOrder_Themis(txList, cm.configuration.Len(), cm.opts.ThemisGamma())
+	// elapsed := time.Since(start)
+	// cm.logger.Info("FairOrder Execution time:", elapsed)
+
 	// 公平排序Themis（传入参数控制），输出[]VT类型序列
 	finalTxSeq := orderfairness.FairOrder_Themis(txList, cm.configuration.Len(), cm.opts.ThemisGamma())
 	cm.logger.Debugf("[Collect-FairOrder]: tx seq len after fair order: %d\n", len(finalTxSeq))
@@ -304,4 +337,18 @@ func (cm *CollectMachine) OnReadyCollect(rc hotstuff.ReadyCollectMsg) {
 	}
 	// 调用Collect发txSeq给本轮view的leader
 	cm.Collect(sync)
+}
+
+// 测试整体平均延迟
+func (cm *CollectMachine) CalThemisLatency() {
+	duration := time.Since(cm.gStartTime)
+	roundLatency := float64(duration) / float64(time.Millisecond)
+	round := cm.synchronizer.View()
+	// cs.logger.Info("Consensus round latency:", roundLatency, "; virtual view: ", round)
+	cm.gStartTime = time.Now()
+	cm.totalLatency += roundLatency
+	if round%20 == 0 {
+		avgLatency := cm.totalLatency / float64(round-10)
+		cm.logger.Info("Themis avg latency:", avgLatency, "; virtual view: ", round)
+	}
 }

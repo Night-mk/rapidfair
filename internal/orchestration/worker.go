@@ -242,6 +242,8 @@ func (w *Worker) createReplica(opts *orchestrationpb.ReplicaOpts) (*replica.Repl
 		// 设置使用RapidFair
 		builder.Options().SetUseRapidFair()
 	}
+	builder.Options().SetOnlyRunOFO(opts.GetOnlyRunOFO())
+	builder.Options().SetOnlyRunConsensus(opts.GetOnlyRunConsensus())
 
 	builder.Options().SetSharedRandomSeed(opts.GetSharedSeed())
 

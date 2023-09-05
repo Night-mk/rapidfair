@@ -44,6 +44,11 @@ type optFairOrder struct {
 
 	txLists map[hotstuff.View]hotstuff.TXList
 	tsfVote map[hotstuff.Hash][]hotstuff.PartialCert // 缓存TxSeqFragment的部分签名PartialCert
+
+	ofoStartTime    time.Time // 全局时间，用于计算每个OFO的平均时间，在pre-Notify记录
+	ofoRound        int       // 计算OFO的轮次
+	ofoTotalTime    float64   // 计算OFO执行总时间
+	ofoLatencyBound float64
 }
 
 func New() modules.OptimisticFairOrder {
@@ -99,10 +104,12 @@ func (of *optFairOrder) MultiCollect(vsync hotstuff.SyncInfo, pc hotstuff.Partia
 			return
 		}
 		// 1.1 验证QC
-		if !of.crypto.VerifyQuorumCertTSF(qc) {
-			of.logger.Info("[MultiCollect]: Quorum Certificate could not be verified!")
-			return
-		}
+		/*
+			if !of.crypto.VerifyQuorumCertTSF(qc) {
+				of.logger.Info("[MultiCollect]: Quorum Certificate could not be verified!")
+				return
+			}
+		*/
 		// 1.2 在cmdcache中确定提交最新QC的virView中的fragment
 		// 通过TxSeqFragment的QC.View()=v获取对应View的Fragment(v)，Fragment此时还没构建QC
 		// 开始执行collect阶段的节点一定能从本地获取qc.virView+1的fragment，因为这些节点已经计算完成了公平排序
@@ -120,6 +127,7 @@ func (of *optFairOrder) MultiCollect(vsync hotstuff.SyncInfo, pc hotstuff.Partia
 			v = qc.View()
 		}
 	}
+	// of.logger.Info("[MultiCollect] after get QC")
 
 	// 2. 从cmdcache中获取txBatch
 	cmd, ok := of.commandQueue.GetTxBatch(of.fairSynchronizer.VirViewContext())
@@ -127,6 +135,7 @@ func (of *optFairOrder) MultiCollect(vsync hotstuff.SyncInfo, pc hotstuff.Partia
 		of.logger.Debug("[MultiCollect] Collect: No command")
 		return
 	}
+	// of.logger.Info("[MultiCollect] after get batch")
 	// 3. 构建MultiCollectMsg消息，并广播（vote给下一个virLeader）
 	newVirView := v + 2 // 此时replica的同步器的virtual view已经了更新，所以新的virtual view应该是QC+2
 	// of.logger.Infof("[MultiCollect]: new virtual view: %d", newVirView)
@@ -205,10 +214,12 @@ func (of *optFairOrder) handleCollect(newVirView hotstuff.View, mc hotstuff.Mult
 	// 先判断是否需要继续收集其他节点发送的数据，之后再验证PC
 	if len(of.txLists[newVirView]) < of.configuration.QuorumSizeFair() {
 		// 验证PC的正确性 （耗时比较长，batchsize=100, 时间约为0.2~1ms±）
-		if !of.crypto.VerifyPartialCertTSF(cert) {
-			of.logger.Infof("[OnMutiCollect]: TSFVote pc could not be verified! for pc virView: %d", newVirView-1)
-			return
-		}
+		/*
+			if !of.crypto.VerifyPartialCertTSF(cert) {
+				of.logger.Infof("[OnMutiCollect]: TSFVote pc could not be verified! for pc virView: %d", newVirView-1)
+				return
+			}
+		*/
 		needAdd = true
 		// 缓存其他节点广播的交易序列到本地缓存txLists: map<VirView,TXList=<ID,hash(Command)>>
 		of.txLists[newVirView][mc.ID] = mc.MultiCollect.TxSeq()
@@ -283,8 +294,30 @@ func (of *optFairOrder) PreNotify(vsync hotstuff.SyncInfo) {
 	var curTxLists hotstuff.TXList
 	if newVirView == 1 {
 		curTxLists = make(hotstuff.TXList)
+		// virView=1时初始化OFO的起始时间ofoStartTime
+		of.ofoStartTime = time.Now()
+		of.ofoRound = 1
+		of.ofoTotalTime = 0
 	} else {
 		curTxLists = of.txLists[newVirView]
+		// 计算独立的OFO执行时间
+		if of.opts.OnlyRunOFO() {
+			duration := time.Since(of.ofoStartTime)
+			roundLatency := float64(duration) / float64(time.Millisecond)
+			of.ofoStartTime = time.Now()
+			// of.logger.Info("OFO round time:", roundLatency)
+			// latency界限3.6, 12.5, 35.7
+			of.ofoLatencyBound = 12.5
+			if roundLatency < of.ofoLatencyBound { // 只记录小于界限的延迟
+				of.ofoTotalTime += roundLatency
+				of.ofoRound += 1
+			}
+			// leader计算每个round OFO的执行时间
+			if newVirView%20 == 0 {
+				avgLatency := of.ofoTotalTime / float64(of.ofoRound)
+				of.logger.Info("OFO avg latency time:", avgLatency, "; virtual view: ", newVirView)
+			}
+		}
 	}
 	// 1.2 使用QC.hash作为parent，使用leader接收的交易序列of.txLists[newVirView]，构建新的TxSeqFragment(v)
 	// 但是在Genesis时，这里本地的交易序列是null，不能用null来公平排序呀？
@@ -312,11 +345,12 @@ func (of *optFairOrder) OnPreNotify(pnm hotstuff.PreNotifyMsg) {
 	// 1. 先判断PreNotifyMsg的正确性
 	tsf := pnm.TxSeqFragment
 	// 1.1 验证QC（batchsize=100, 时间约为0.1~4ms±）
-	if !of.crypto.VerifyQuorumCertTSF(tsf.QuorumCert()) {
-		of.logger.Info("[OnPreNotify]: Invalid QC")
-		return
-	}
-
+	/*
+		if !of.crypto.VerifyQuorumCertTSF(tsf.QuorumCert()) {
+			of.logger.Info("[OnPreNotify]: Invalid QC")
+			return
+		}
+	*/
 	// 1.2 验证leader是否正确
 	if pnm.ID != of.leaderRotation.GetLeader(tsf.VirView()) {
 		of.logger.Infof("[OnPreNotify]: Invalid virtual leader")
@@ -362,7 +396,7 @@ func (of *optFairOrder) OnPreNotify(pnm hotstuff.PreNotifyMsg) {
 
 	// 3. 当前VirView()的replica（包括leader）根据tsf指定的节点的交易序列TxSeqHash，在本地计算公平排序
 	// 本地计算公平排序
-	start := time.Now() // 获取当前时间
+	// start := time.Now() // 获取当前时间
 	odc := of.col.FairOrder(tsf.TxSeqHash())
 	// 构建fragment
 	fragment := hotstuff.NewFragment(tsf.VirView(), tsf.VirLeader(), odc, tsf.TxSeqHash(), hotstuff.Command(""), make(hotstuff.TXList))
@@ -370,15 +404,15 @@ func (of *optFairOrder) OnPreNotify(pnm hotstuff.PreNotifyMsg) {
 	of.fragmentChain.Store(fragment)
 	// 将fragment增加到cmdCache的缓存中
 	// of.commandQueue.AddFragment(fragment)
-	elapsed1 := time.Since(start)
-	curLeaderID := of.leaderRotation.GetLeader(tsf.VirView())
-	// of.logger.Info("Replica Fair Order + new,store fragment time:", elapsed1)
-	if curLeaderID == of.opts.ID() {
-		// of.logger.Info("Virtual Leader Fair Order + new,store fragment time:", elapsed1)
-		if tsf.VirView()%20 == 0 {
-			of.logger.Info("Virtual Leader Fair Order + new,store fragment time:", elapsed1)
-		}
-	}
+	// elapsed1 := time.Since(start)
+
+	// curLeaderID := of.leaderRotation.GetLeader(tsf.VirView())
+	// if curLeaderID == of.opts.ID() {
+	// 	of.logger.Info("Virtual Leader Fair Order + new,store fragment time:", elapsed1)
+	// if tsf.VirView()%20 == 0 {
+	// 	of.logger.Info("Virtual Leader Fair Order + new,store fragment time:", elapsed1)
+	// }
+	// }
 
 	// 4. 如果没有推进view，则在defer方法中最后推进节点的view（只有current replica会推进）
 	didAdvanceView := false

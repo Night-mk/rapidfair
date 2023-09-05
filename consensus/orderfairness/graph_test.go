@@ -9,12 +9,12 @@ import (
 
 func InitGraph() *Graph {
 	g := NewGraph()
-	g.addVertex("tx1")
-	g.addVertex("tx2")
-	g.addVertex("tx3")
-	g.addVertex("tx4")
-	g.addVertex("tx5")
-	g.addVertex("tx6")
+	g.addVertex("tx1", 10)
+	g.addVertex("tx2", 10)
+	g.addVertex("tx3", 10)
+	g.addVertex("tx4", 10)
+	g.addVertex("tx5", 10)
+	g.addVertex("tx6", 10)
 
 	g.addEdge("tx1", "tx2")
 	g.addEdge("tx1", "tx3")
@@ -64,11 +64,11 @@ func TestGraph(t *testing.T) {
 
 var U int = 1
 var R int = 1
-var TxNum int = 50    // 50, 100, 200, 400
+var TxNum int = 100   // 50, 100, 200, 400
 var NodeNum int = 5   // 5, 6, 9, 21, 41
 var Gamma float32 = 1 // 1, 0.9, 0.75, 0.6, 0.55
 // var Fault int = 3
-var Rounds int = 2
+var Rounds int = 10
 
 // 测试公平排序交易序列
 func TestOrderFairness(t *testing.T) {
@@ -78,7 +78,7 @@ func TestOrderFairness(t *testing.T) {
 	fmt.Println("gamma: ", Gamma)
 	// 测试k次取平均值（5次？）
 	for k := 0; k < Rounds; k++ {
-		fmt.Println("Round ", k)
+		fmt.Printf("\n Round %d \n", k)
 		// 1. 生成txList
 		// 生成txList的节点数量为quorum
 		quorumNodeNum := NodeNum - int(math.Floor((float64(nodeNum-1)*float64(2*Gamma-1))/float64(4)))
@@ -88,11 +88,12 @@ func TestOrderFairness(t *testing.T) {
 		// fmt.Println("txList: ", txList)
 		fmt.Println("sendTxSeq len: ", len(sendTxSeq))
 		// fmt.Println(sendTxSeq)
+		// FairOrder_Themis_Split(txList, NodeNum, Gamma)
 
 		// 2. 测试公平排序
 		// 计算程序执行时间
 		start := time.Now() // 获取当前时间
-		finalTxSeq := FairOrder_Themis(txList, NodeNum, Gamma)
+		finalTxSeq := FairOrder_Themis_Measure(txList, NodeNum, Gamma)
 		elapsed := time.Since(start)
 		fmt.Println("Execution time:", elapsed)
 		sumExTime += uint64(elapsed)
@@ -101,8 +102,8 @@ func TestOrderFairness(t *testing.T) {
 		fmt.Println("finalTxSeq len: ", len(finalTxSeq))
 		// fmt.Println("finalTxSeq: ", finalTxSeq)
 
-		sRate := Metric_SuccessOrderRate(finalTxSeq, sendTxSeq)
-		fmt.Printf("success order rate: %.4f \n", sRate)
+		// sRate := Metric_SuccessOrderRate(finalTxSeq, sendTxSeq)
+		// fmt.Printf("success order rate: %.4f \n\n", sRate)
 	}
 
 	// 计算平均值

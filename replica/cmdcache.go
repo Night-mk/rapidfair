@@ -3,7 +3,6 @@ package replica
 import (
 	"container/list"
 	"context"
-	"crypto/sha256"
 	"sync"
 
 	"github.com/relab/hotstuff"
@@ -160,6 +159,7 @@ awaitBatch:
 // RapidFair: baseline 设计新的交易读取方法GetTxBatch()
 // 使得在获取batchtx进行collect的时候不会从cache中删除，只有收到proposal并通过后才从cache里删除
 func (c *cmdCache) GetTxBatch(ctx context.Context) (cmd hotstuff.Command, ok bool) {
+	// c.logger.Info("[GetTxBatch] start")
 	// 使用new对clientpb.Batch进行实例化
 	batch := new(clientpb.Batch)
 	c.mut.Lock()
@@ -205,11 +205,10 @@ awaitBatch:
 		}
 		// 将没有重复的交易cmd加入到batch中
 		// RapidFair优化：交易的data field只用计算hash，之后加入batch
-		// if c.opts.UseRapidFair() || c.opts.UseFairOrder() { // Themis优化后，data进行hash之后传输
 		if c.opts.UseFairOrder() { // Themis优化后，data进行hash之后传输
-			// if c.opts.UseRapidFair() { // Themis优化前
-			dataHash := sha256.Sum256(cmd.Data)
-			cmd.Data = dataHash[:]
+			// dataHash := sha256.Sum256(cmd.Data)
+			// cmd.Data = dataHash[:]
+			cmd.Data = []byte{} // 采用和rapidFair一样的方案，去掉data本身只保留ID传输
 		}
 		if c.opts.UseRapidFair() { // RapidFair再次优化，cmd只记录ID，不记录Data
 			cmd.Data = []byte{}

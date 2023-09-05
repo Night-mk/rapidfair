@@ -79,17 +79,23 @@ func (e *Experiment) Run() (err error) {
 		return fmt.Errorf("failed to create replicas: %w", err)
 	}
 
+	e.Logger.Info("Starting clients...")
+	err = e.startClients(cfg)
+	if err != nil {
+		return fmt.Errorf("failed to start clients: %w", err)
+	}
+
 	e.Logger.Info("Starting replicas...")
 	err = e.startReplicas(cfg)
 	if err != nil {
 		return fmt.Errorf("failed to start replicas: %w", err)
 	}
 
-	e.Logger.Info("Starting clients...")
-	err = e.startClients(cfg)
-	if err != nil {
-		return fmt.Errorf("failed to start clients: %w", err)
-	}
+	// e.Logger.Info("Starting clients...")
+	// err = e.startClients(cfg)
+	// if err != nil {
+	// 	return fmt.Errorf("failed to start clients: %w", err)
+	// }
 	// 直接在这里sleep一个experiment总时长，之后就直接stop
 	time.Sleep(e.Duration)
 
@@ -125,6 +131,7 @@ func (e *Experiment) createReplicas() (cfg *orchestrationpb.ReplicaConfiguration
 
 	for host, worker := range e.Hosts {
 		internalAddr := e.HostConfigs[host].InternalAddress
+		e.Logger.Infof("host: %s, internal adderss: %v", host, internalAddr)
 
 		req := &orchestrationpb.CreateReplicaRequest{Replicas: make(map[uint32]*orchestrationpb.ReplicaOpts)}
 		for _, id := range e.hostsToReplicas[host] {
@@ -134,6 +141,7 @@ func (e *Experiment) createReplicas() (cfg *orchestrationpb.ReplicaConfiguration
 			// the generated certificate should be valid for the hostname and its ip addresses.
 			validFor := []string{"localhost", "127.0.0.1", host}
 			ips, err := net.LookupIP(host)
+			e.Logger.Infof("net.LookupIP(host): %v", ips)
 			if err == nil {
 				for _, ip := range ips {
 					if ipStr := ip.String(); ipStr != host && ipStr != internalAddr {
@@ -141,14 +149,16 @@ func (e *Experiment) createReplicas() (cfg *orchestrationpb.ReplicaConfiguration
 					}
 				}
 			}
+			fmt.Println("valid IPs: ", validFor)
 
 			// add the internal address as well
 			if internalAddr != "" {
 				validFor = append(validFor, internalAddr)
 			}
-
+			// 为replica创建公私钥
 			keyChain, err := keygen.GenerateKeyChain(id, validFor, e.Crypto, e.ca, e.caKey)
 			if err != nil {
+				fmt.Printf("failed to generate keychain: %v", err)
 				return nil, fmt.Errorf("failed to generate keychain: %w", err)
 			}
 
@@ -170,6 +180,7 @@ func (e *Experiment) createReplicas() (cfg *orchestrationpb.ReplicaConfiguration
 				replicaCfg.Address = host
 			}
 			e.Logger.Debugf("Address for replica %d: %s", id, replicaCfg.Address)
+			e.Logger.Infof("Address for replica %d: %s", id, replicaCfg.Address)
 			cfg.Replicas[id] = replicaCfg
 		}
 	}
@@ -177,6 +188,7 @@ func (e *Experiment) createReplicas() (cfg *orchestrationpb.ReplicaConfiguration
 	return cfg, nil
 }
 
+// 将replica和client分配给不同的host（尽量均匀）
 // assignReplicasAndClients assigns replica and client ids to each host,
 // based on the requested amount of replicas/clients and the assignments for each host.
 func (e *Experiment) assignReplicasAndClients() (err error) {
@@ -234,7 +246,10 @@ func (e *Experiment) assignReplicasAndClients() (err error) {
 		)
 	}
 
+	// 一个host里面可以配置多个replias和clients（但是每个副本的internal address怎么分配的？）
+	e.Logger.Infof("e.Hosts when assign: %v", e.Hosts)
 	for host := range e.Hosts {
+		// e.Logger.Infof("e.Hosts when assign: %v", host)
 		var (
 			numReplicas int
 			numClients  int

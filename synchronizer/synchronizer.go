@@ -130,7 +130,12 @@ func (s *Synchronizer) Start(ctx context.Context) {
 	// Leader首先提出genesisblock
 	if s.currentView == 1 && s.leaderRotation.GetLeader(s.currentView) == s.opts.ID() {
 		if s.opts.UseRapidFair() {
-			s.consensus.RapidFairPropose(s.SyncInfo())
+			s.logger.Info("s.opts.OnlyRunOFO: ", s.opts.OnlyRunOFO())
+			if !s.opts.OnlyRunOFO() {
+				s.logger.Info("start rapidFairPropose")
+				s.consensus.RapidFairPropose(s.SyncInfo())
+			}
+			// 否则仅执行OFO，不启动RapidFair的共识流程
 		} else {
 			s.consensus.Propose(s.SyncInfo())
 		}
@@ -399,10 +404,9 @@ func (s *Synchronizer) AdvanceView(syncInfo hotstuff.SyncInfo) {
 		// elapsed := time.Since(s.lastStartTime)
 		// fmt.Println("Leader: ConsensusSync Execution time:", elapsed)
 		// s.lastStartTime = time.Now()
-
 		s.logger.Debugf("leader advanced to view %d", s.currentView)
 		if s.opts.UseFairOrder() {
-			s.logger.Debugf("[FairOrder] AdvanceView(): View in synchronizer: %d", s.currentView)
+			// s.logger.Infof("[FairOrder] AdvanceView() readcollect: View in synchronizer: %d", s.currentView)
 			// leader广播ReadyCollect通知replicas可以发送txSeq
 			s.col.ReadyCollect(syncInfo)
 		} else if s.opts.UseRapidFair() {

@@ -186,7 +186,7 @@ func TimeAndAverage(groups []MeasurementGroup, getValue func(Measurement) (float
 	min_latency := float64(100000000)
 	// 【在后续多server上部署的时候可能需要修改！！】 希望去掉偏离比较大的前k个结果，通常是前3个区块的结果
 	badResultBlocks := uint64(3)
-	nodeNum := uint64(5)
+	// nodeNum := uint64(5)
 	// throughput每次计算的groups长度都不同？
 	// fmt.Println("groups len: ", len(groups))
 	for _, group := range groups { // 每个group计算一次x,y顶点的值,总共len(group)组顶点
@@ -216,17 +216,17 @@ func TimeAndAverage(groups []MeasurementGroup, getValue func(Measurement) (float
 			case *types.ThroughputMeasurement:
 				// 计算区块延迟
 				all_num += n
-				if all_num > badResultBlocks*nodeNum {
-					all_sum += v * float64(n)
-					blockLatency := GetBlockLatency(measurement)
-					all_blockLatency += blockLatency
-					if max_tps < v {
-						max_tps = v
-					}
-					if min_latency > blockLatency {
-						min_latency = blockLatency
-					}
+				// if all_num > badResultBlocks*nodeNum {
+				all_sum += v * float64(n)
+				blockLatency := GetBlockLatency(measurement)
+				all_blockLatency += blockLatency
+				if max_tps < v {
+					max_tps = v
 				}
+				if min_latency > blockLatency {
+					min_latency = blockLatency
+				}
+				// }
 			}
 		}
 
@@ -253,7 +253,8 @@ func TimeAndAverage(groups []MeasurementGroup, getValue func(Measurement) (float
 				fmt.Println("latency num: ", num)
 				fmt.Printf("avg end-to-end latency(client): %.4f ms\n", finavg)
 			case *types.ThroughputMeasurement:
-				num := all_num - badResultBlocks*nodeNum
+				// num := all_num - badResultBlocks*nodeNum
+				num := all_num
 				finavg = all_sum / float64(num)
 				finavg_blockLatency = all_blockLatency / float64(num)
 				fmt.Println("")

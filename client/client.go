@@ -168,7 +168,7 @@ func (c *Client) Run(ctx context.Context) {
 	err := c.sendCommands(ctx)
 	if err != nil && !errors.Is(err, io.EOF) {
 		c.logger.Panicf("Failed to send commands: %v", err)
-		// c.logger.Infof("Failed to send commands: %v", err)
+		c.logger.Infof("Failed to send commands: %v", err)
 	}
 	c.close()
 
